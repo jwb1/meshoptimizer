@@ -14,6 +14,46 @@
 #include <emscripten.h>
 #endif
 
+static printfLikeFunction stdoutFn = nullptr;
+
+void overrideStdout(printfLikeFunction fn)
+{
+	stdoutFn = fn;
+}
+
+void printfStdout(const char* format_string, ...)
+{
+	va_list arglist;
+	va_start(arglist, format_string);
+
+	if (stdoutFn)
+		stdoutFn(format_string, arglist);
+	else
+		vfprintf(stdout, format_string, arglist);
+
+	va_end(arglist);
+}
+
+static printfLikeFunction stderrFn = nullptr;
+
+void overrideStderr(printfLikeFunction fn)
+{
+	stderrFn = fn;
+}
+
+void printfStderr(const char* format_string, ...)
+{
+	va_list arglist;
+	va_start(arglist, format_string);
+
+	if (stderrFn)
+		stderrFn(format_string, arglist);
+	else
+		vfprintf(stderr, format_string, arglist);
+
+	va_end(arglist);
+}
+
 std::string getVersion()
 {
 	char result[32];
@@ -96,7 +136,7 @@ static void printMeshStats(const std::vector<Mesh>& meshes, const char* name)
 		total_draws += std::max(size_t(1), mesh.nodes.size());
 	}
 
-	printf("%s: %d mesh primitives (%d triangles, %d vertices); %d draw calls (%d instances, %lld triangles)\n", name,
+	printfStdout("%s: %d mesh primitives (%d triangles, %d vertices); %d draw calls (%d instances, %lld triangles)\n", name,
 	       int(meshes.size()), int(mesh_triangles), int(mesh_vertices),
 	       int(total_draws), int(total_instances), (long long)total_triangles);
 }
@@ -111,9 +151,9 @@ static void printSceneStats(const std::vector<BufferView>& views, const std::vec
 		bytes[view.kind] += view.bytes;
 	}
 
-	printf("output: %d nodes, %d meshes (%d primitives), %d materials\n", int(node_offset), int(mesh_offset), int(meshes.size()), int(material_offset));
-	printf("output: JSON %d bytes, buffers %d bytes\n", int(json_size), int(bin_size));
-	printf("output: buffers: vertex %d bytes, index %d bytes, skin %d bytes, time %d bytes, keyframe %d bytes, instance %d bytes, image %d bytes\n",
+	printfStdout("output: %d nodes, %d meshes (%d primitives), %d materials\n", int(node_offset), int(mesh_offset), int(meshes.size()), int(material_offset));
+	printfStdout("output: JSON %d bytes, buffers %d bytes\n", int(json_size), int(bin_size));
+	printfStdout("output: buffers: vertex %d bytes, index %d bytes, skin %d bytes, time %d bytes, keyframe %d bytes, instance %d bytes, image %d bytes\n",
 	       int(bytes[BufferView::Kind_Vertex]), int(bytes[BufferView::Kind_Index]), int(bytes[BufferView::Kind_Skin]),
 	       int(bytes[BufferView::Kind_Time]), int(bytes[BufferView::Kind_Keyframe]), int(bytes[BufferView::Kind_Instance]),
 	       int(bytes[BufferView::Kind_Image]));
@@ -150,7 +190,7 @@ static void printAttributeStats(const std::vector<BufferView>& views, BufferView
 
 		size_t count = view.data.size() / view.stride;
 
-		printf("stats: %s %s: compressed %d bytes (%.1f bits), raw %d bytes (%d bits)\n",
+		printfStdout("stats: %s %s: compressed %d bytes (%.1f bits), raw %d bytes (%d bits)\n",
 		       name, variant,
 		       int(view.bytes), double(view.bytes) / double(count) * 8,
 		       int(view.data.size()), int(view.stride * 8));
@@ -185,7 +225,7 @@ static void printReport(const char* path, cgltf_data* data, const std::vector<Bu
 	FILE* out = fopen(path, "wb");
 	if (!out)
 	{
-		fprintf(stderr, "Warning: cannot save report to %s\n", path);
+		printfStderr("Warning: cannot save report to %s\n", path);
 		return;
 	}
 
@@ -219,11 +259,11 @@ static void printReport(const char* path, cgltf_data* data, const std::vector<Bu
 	fclose(out);
 }
 
-static void process(cgltf_data* data, const char* input_path, const char* output_path, const char* report_path, std::vector<Mesh>& meshes, std::vector<Animation>& animations, const std::string& extras, const Settings& settings, std::string& json, std::string& bin, std::string& fallback, size_t& fallback_size)
+void process(cgltf_data* data, const char* input_path, const char* output_path, const char* report_path, std::vector<Mesh>& meshes, std::vector<Animation>& animations, const std::string& extras, const Settings& settings, std::string& json, std::string& bin, std::string& fallback, size_t& fallback_size)
 {
 	if (settings.verbose)
 	{
-		printf("input: %d nodes, %d meshes (%d primitives), %d materials, %d skins, %d animations\n",
+		printfStdout("input: %d nodes, %d meshes (%d primitives), %d materials, %d skins, %d animations\n",
 		       int(data->nodes_count), int(data->meshes_count), int(meshes.size()), int(data->materials_count), int(data->skins_count), int(animations.size()));
 		printMeshStats(meshes, "input");
 	}
@@ -379,7 +419,7 @@ static void process(cgltf_data* data, const char* input_path, const char* output
 			const char* uri = image.uri;
 			bool embedded = !uri || strncmp(uri, "data:", 5) == 0;
 
-			printf("image %d (%s) is being encoded with %s\n", int(i), embedded ? "embedded" : uri, settings.texture_toktx ? "toktx" : "basisu");
+			printfStdout("image %d (%s) is being encoded with %s\n", int(i), embedded ? "embedded" : uri, settings.texture_toktx ? "toktx" : "basisu");
 		}
 
 		comma(json_images);
@@ -710,7 +750,7 @@ static const char* getBaseName(const char* path)
 	return std::max(rs, bs);
 }
 
-static std::string getBufferSpec(const char* bin_path, size_t bin_size, const char* fallback_path, size_t fallback_size, bool fallback_ref)
+std::string getBufferSpec(const char* bin_path, size_t bin_size, const char* fallback_path, size_t fallback_size, bool fallback_ref)
 {
 	std::string json;
 	append(json, "\"buffers\":[");
@@ -766,7 +806,7 @@ int gltfpack(const char* input, const char* output, const char* report, Settings
 
 		if (error)
 		{
-			fprintf(stderr, "Error loading %s: %s\n", input, error);
+			printfStderr("Error loading %s: %s\n", input, error);
 			return 2;
 		}
 	}
@@ -777,13 +817,13 @@ int gltfpack(const char* input, const char* output, const char* report, Settings
 
 		if (!data)
 		{
-			fprintf(stderr, "Error loading %s: %s\n", input, error);
+			printfStderr("Error loading %s: %s\n", input, error);
 			return 2;
 		}
 	}
 	else
 	{
-		fprintf(stderr, "Error loading %s: unknown extension (expected .gltf or .glb or .obj)\n", input);
+		printfStderr("Error loading %s: unknown extension (expected .gltf or .glb or .obj)\n", input);
 		return 2;
 	}
 
@@ -795,13 +835,13 @@ int gltfpack(const char* input, const char* output, const char* report, Settings
 		}
 		else if (!checkBasis(settings.verbose > 1))
 		{
-			fprintf(stderr, "Error: toktx is not present in PATH or TOKTX_PATH is not set\n");
+			printfStderr("Error: toktx is not present in PATH or TOKTX_PATH is not set\n");
 			return 3;
 		}
 
 		if (settings.texture_scale < 1 && !settings.texture_toktx)
 		{
-			fprintf(stderr, "Error: -ts option is only supported by toktx\n");
+			printfStderr("Error: -ts option is only supported by toktx\n");
 			return 3;
 		}
 	}
@@ -835,7 +875,7 @@ int gltfpack(const char* input, const char* output, const char* report, Settings
 		FILE* outfb = settings.fallback ? fopen(fbpath.c_str(), "wb") : NULL;
 		if (!outjson || !outbin || (!outfb && settings.fallback))
 		{
-			fprintf(stderr, "Error saving %s\n", output);
+			printfStderr("Error saving %s\n", output);
 			return 4;
 		}
 
@@ -866,7 +906,7 @@ int gltfpack(const char* input, const char* output, const char* report, Settings
 		FILE* outfb = settings.fallback ? fopen(fbpath.c_str(), "wb") : NULL;
 		if (!out || (!outfb && settings.fallback))
 		{
-			fprintf(stderr, "Error saving %s\n", output);
+			printfStderr("Error saving %s\n", output);
 			return 4;
 		}
 
@@ -902,13 +942,14 @@ int gltfpack(const char* input, const char* output, const char* report, Settings
 	}
 	else
 	{
-		fprintf(stderr, "Error saving %s: unknown extension (expected .gltf or .glb)\n", output);
+		printfStderr("Error saving %s: unknown extension (expected .gltf or .glb)\n", output);
 		return 4;
 	}
 
 	return 0;
 }
 
+#ifndef MESHOPT_BUILD_GLTFPACK_LIB
 int main(int argc, char** argv)
 {
 	meshopt_encodeIndexVersion(1);
@@ -1077,7 +1118,7 @@ int main(int argc, char** argv)
 		}
 		else if (arg[0] == '-')
 		{
-			fprintf(stderr, "Unrecognized option %s\n", arg);
+			printfStderr("Unrecognized option %s\n", arg);
 			return 1;
 		}
 		else if (test)
@@ -1086,7 +1127,7 @@ int main(int argc, char** argv)
 		}
 		else
 		{
-			fprintf(stderr, "Expected option, got %s instead\n", arg);
+			printfStderr("Expected option, got %s instead\n", arg);
 			return 1;
 		}
 	}
@@ -1094,7 +1135,7 @@ int main(int argc, char** argv)
 	// shortcut for gltfpack -v
 	if (settings.verbose && argc == 2)
 	{
-		printf("gltfpack %s\n", getVersion().c_str());
+		printfStdout("gltfpack %s\n", getVersion().c_str());
 		return 0;
 	}
 
@@ -1104,7 +1145,7 @@ int main(int argc, char** argv)
 		{
 			const char* path = testinputs[i];
 
-			printf("%s\n", path);
+			printfStdout("%s\n", path);
 			gltfpack(path, NULL, NULL, settings);
 		}
 
@@ -1113,56 +1154,56 @@ int main(int argc, char** argv)
 
 	if (!input || !output || help)
 	{
-		fprintf(stderr, "gltfpack %s\n", getVersion().c_str());
-		fprintf(stderr, "Usage: gltfpack [options] -i input -o output\n");
+		printfStderr("gltfpack %s\n", getVersion().c_str());
+		printfStderr("Usage: gltfpack [options] -i input -o output\n");
 
 		if (help)
 		{
-			fprintf(stderr, "\nBasics:\n");
-			fprintf(stderr, "\t-i file: input file to process, .obj/.gltf/.glb\n");
-			fprintf(stderr, "\t-o file: output file path, .gltf/.glb\n");
-			fprintf(stderr, "\t-c: produce compressed gltf/glb files (-cc for higher compression ratio)\n");
-			fprintf(stderr, "\nTextures:\n");
-			fprintf(stderr, "\t-tc: convert all textures to KTX2 with BasisU supercompression (using basisu/toktx executable)\n");
-			fprintf(stderr, "\t-tu: use UASTC when encoding textures (much higher quality and much larger size)\n");
-			fprintf(stderr, "\t-tq N: set texture encoding quality (default: 8; N should be between 1 and 10\n");
-			fprintf(stderr, "\t-ts R: scale texture dimensions by the ratio R (default: 1; R should be between 0 and 1)\n");
-			fprintf(stderr, "\t-tp: resize textures to nearest power of 2 to conform to WebGL1 restrictions\n");
-			fprintf(stderr, "\nSimplification:\n");
-			fprintf(stderr, "\t-si R: simplify meshes to achieve the ratio R (default: 1; R should be between 0 and 1)\n");
-			fprintf(stderr, "\t-sa: aggressively simplify to the target ratio disregarding quality\n");
-			fprintf(stderr, "\nVertices:\n");
-			fprintf(stderr, "\t-vp N: use N-bit quantization for positions (default: 14; N should be between 1 and 16)\n");
-			fprintf(stderr, "\t-vt N: use N-bit quantization for texture coordinates (default: 12; N should be between 1 and 16)\n");
-			fprintf(stderr, "\t-vn N: use N-bit quantization for normals and tangents (default: 8; N should be between 1 and 16)\n");
-			fprintf(stderr, "\nAnimations:\n");
-			fprintf(stderr, "\t-at N: use N-bit quantization for translations (default: 16; N should be between 1 and 24)\n");
-			fprintf(stderr, "\t-ar N: use N-bit quantization for rotations (default: 12; N should be between 4 and 16)\n");
-			fprintf(stderr, "\t-as N: use N-bit quantization for scale (default: 16; N should be between 1 and 24)\n");
-			fprintf(stderr, "\t-af N: resample animations at N Hz (default: 30)\n");
-			fprintf(stderr, "\t-ac: keep constant animation tracks even if they don't modify the node transform\n");
-			fprintf(stderr, "\nScene:\n");
-			fprintf(stderr, "\t-kn: keep named nodes and meshes attached to named nodes so that named nodes can be transformed externally\n");
-			fprintf(stderr, "\t-km: keep named materials and disable named material merging\n");
-			fprintf(stderr, "\t-ke: keep extras data\n");
-			fprintf(stderr, "\t-mm: merge instances of the same mesh together when possible\n");
-			fprintf(stderr, "\t-mi: use EXT_mesh_gpu_instancing when serializing multiple mesh instances\n");
-			fprintf(stderr, "\nMiscellaneous:\n");
-			fprintf(stderr, "\t-cf: produce compressed gltf/glb files with fallback for loaders that don't support compression\n");
-			fprintf(stderr, "\t-noq: disable quantization; produces much larger glTF files with no extensions\n");
-			fprintf(stderr, "\t-v: verbose output (print version when used without other options)\n");
-			fprintf(stderr, "\t-r file: output a JSON report to file\n");
-			fprintf(stderr, "\t-h: display this help and exit\n");
+			printfStderr("\nBasics:\n");
+			printfStderr("\t-i file: input file to process, .obj/.gltf/.glb\n");
+			printfStderr("\t-o file: output file path, .gltf/.glb\n");
+			printfStderr("\t-c: produce compressed gltf/glb files (-cc for higher compression ratio)\n");
+			printfStderr("\nTextures:\n");
+			printfStderr("\t-tc: convert all textures to KTX2 with BasisU supercompression (using basisu/toktx executable)\n");
+			printfStderr("\t-tu: use UASTC when encoding textures (much higher quality and much larger size)\n");
+			printfStderr("\t-tq N: set texture encoding quality (default: 8; N should be between 1 and 10\n");
+			printfStderr("\t-ts R: scale texture dimensions by the ratio R (default: 1; R should be between 0 and 1)\n");
+			printfStderr("\t-tp: resize textures to nearest power of 2 to conform to WebGL1 restrictions\n");
+			printfStderr("\nSimplification:\n");
+			printfStderr("\t-si R: simplify meshes to achieve the ratio R (default: 1; R should be between 0 and 1)\n");
+			printfStderr("\t-sa: aggressively simplify to the target ratio disregarding quality\n");
+			printfStderr("\nVertices:\n");
+			printfStderr("\t-vp N: use N-bit quantization for positions (default: 14; N should be between 1 and 16)\n");
+			printfStderr("\t-vt N: use N-bit quantization for texture coordinates (default: 12; N should be between 1 and 16)\n");
+			printfStderr("\t-vn N: use N-bit quantization for normals and tangents (default: 8; N should be between 1 and 16)\n");
+			printfStderr("\nAnimations:\n");
+			printfStderr("\t-at N: use N-bit quantization for translations (default: 16; N should be between 1 and 24)\n");
+			printfStderr("\t-ar N: use N-bit quantization for rotations (default: 12; N should be between 4 and 16)\n");
+			printfStderr("\t-as N: use N-bit quantization for scale (default: 16; N should be between 1 and 24)\n");
+			printfStderr("\t-af N: resample animations at N Hz (default: 30)\n");
+			printfStderr("\t-ac: keep constant animation tracks even if they don't modify the node transform\n");
+			printfStderr("\nScene:\n");
+			printfStderr("\t-kn: keep named nodes and meshes attached to named nodes so that named nodes can be transformed externally\n");
+			printfStderr("\t-km: keep named materials and disable named material merging\n");
+			printfStderr("\t-ke: keep extras data\n");
+			printfStderr("\t-mm: merge instances of the same mesh together when possible\n");
+			printfStderr("\t-mi: use EXT_mesh_gpu_instancing when serializing multiple mesh instances\n");
+			printfStderr("\nMiscellaneous:\n");
+			printfStderr("\t-cf: produce compressed gltf/glb files with fallback for loaders that don't support compression\n");
+			printfStderr("\t-noq: disable quantization; produces much larger glTF files with no extensions\n");
+			printfStderr("\t-v: verbose output (print version when used without other options)\n");
+			printfStderr("\t-r file: output a JSON report to file\n");
+			printfStderr("\t-h: display this help and exit\n");
 		}
 		else
 		{
-			fprintf(stderr, "\nBasics:\n");
-			fprintf(stderr, "\t-i file: input file to process, .obj/.gltf/.glb\n");
-			fprintf(stderr, "\t-o file: output file path, .gltf/.glb\n");
-			fprintf(stderr, "\t-c: produce compressed gltf/glb files (-cc for higher compression ratio)\n");
-			fprintf(stderr, "\t-tc: convert all textures to KTX2 with BasisU supercompression (using basisu/toktx executable)\n");
-			fprintf(stderr, "\t-si R: simplify meshes to achieve the ratio R (default: 1; R should be between 0 and 1)\n");
-			fprintf(stderr, "\nRun gltfpack -h to display a full list of options\n");
+			printfStderr("\nBasics:\n");
+			printfStderr("\t-i file: input file to process, .obj/.gltf/.glb\n");
+			printfStderr("\t-o file: output file path, .gltf/.glb\n");
+			printfStderr("\t-c: produce compressed gltf/glb files (-cc for higher compression ratio)\n");
+			printfStderr("\t-tc: convert all textures to KTX2 with BasisU supercompression (using basisu/toktx executable)\n");
+			printfStderr("\t-si R: simplify meshes to achieve the ratio R (default: 1; R should be between 0 and 1)\n");
+			printfStderr("\nRun gltfpack -h to display a full list of options\n");
 		}
 
 		return 1;
@@ -1170,15 +1211,16 @@ int main(int argc, char** argv)
 
 	if (settings.texture_scale < 1 && !settings.texture_ktx2)
 	{
-		fprintf(stderr, "Option -ts is only supported when -tc is set as well\n");
+		printfStderr("Option -ts is only supported when -tc is set as well\n");
 		return 1;
 	}
 
 	if (settings.texture_pow2 && !settings.texture_ktx2)
 	{
-		fprintf(stderr, "Option -tp is only supported when -tc is set as well\n");
+		printfStderr("Option -tp is only supported when -tc is set as well\n");
 		return 1;
 	}
 
 	return gltfpack(input, output, report, settings);
 }
+#endif

@@ -148,7 +148,7 @@ static void parseMeshesGltf(cgltf_data* data, std::vector<Mesh>& meshes, std::ve
 
 			if (primitive.type == cgltf_primitive_type_points && primitive.indices)
 			{
-				fprintf(stderr, "Warning: ignoring primitive %d of mesh %d because indexed points are not supported\n", int(pi), int(mi));
+				printfStderr("Warning: ignoring primitive %d of mesh %d because indexed points are not supported\n", int(pi), int(mi));
 				continue;
 			}
 
@@ -185,7 +185,7 @@ static void parseMeshesGltf(cgltf_data* data, std::vector<Mesh>& meshes, std::ve
 
 				if (attr.type == cgltf_attribute_type_invalid)
 				{
-					fprintf(stderr, "Warning: ignoring unknown attribute %s in primitive %d of mesh %d\n", attr.name, int(pi), int(mi));
+					printfStderr("Warning: ignoring unknown attribute %s in primitive %d of mesh %d\n", attr.name, int(pi), int(mi));
 					continue;
 				}
 
@@ -214,7 +214,7 @@ static void parseMeshesGltf(cgltf_data* data, std::vector<Mesh>& meshes, std::ve
 
 					if (attr.type == cgltf_attribute_type_invalid)
 					{
-						fprintf(stderr, "Warning: ignoring unknown attribute %s in morph target %d of primitive %d of mesh %d\n", attr.name, int(ti), int(pi), int(mi));
+						printfStderr("Warning: ignoring unknown attribute %s in morph target %d of primitive %d of mesh %d\n", attr.name, int(ti), int(pi), int(mi));
 						continue;
 					}
 
@@ -300,7 +300,7 @@ static void parseAnimationsGltf(cgltf_data* data, std::vector<Animation>& animat
 
 			if (!channel.target_node)
 			{
-				fprintf(stderr, "Warning: ignoring channel %d of animation %d because it has no target node\n", int(j), int(i));
+				printfStderr("Warning: ignoring channel %d of animation %d because it has no target node\n", int(j), int(i));
 				continue;
 			}
 
@@ -320,7 +320,7 @@ static void parseAnimationsGltf(cgltf_data* data, std::vector<Animation>& animat
 
 		if (result.tracks.empty())
 		{
-			fprintf(stderr, "Warning: ignoring animation %d because it has no valid tracks\n", int(i));
+			printfStderr("Warning: ignoring animation %d because it has no valid tracks\n", int(i));
 			animations.pop_back();
 		}
 	}

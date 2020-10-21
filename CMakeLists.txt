@@ -13,6 +13,7 @@ project(meshoptimizer VERSION 0.14 LANGUAGES CXX)
 
 option(MESHOPT_BUILD_DEMO "Build demo" OFF)
 option(MESHOPT_BUILD_GLTFPACK "Build gltfpack" OFF)
+option(MESHOPT_BUILD_GLTFPACK_LIB "Build gltfpack as a library" OFF)
 option(MESHOPT_BUILD_SHARED_LIBS "Build shared libraries" OFF)
 
 # add_library() needs BUILD_SHARED_LIBS set to decide between static and
@@ -84,13 +85,18 @@ if(MESHOPT_BUILD_DEMO)
 endif()
 
 if(MESHOPT_BUILD_GLTFPACK)
-    add_executable(gltfpack ${GLTF_SOURCES} tools/meshloader.cpp)
-    target_link_libraries(gltfpack meshoptimizer)
-    list(APPEND TARGETS gltfpack)
+    if(MESHOPT_BUILD_GLTFPACK_LIB)
+        add_library(gltfpack ${GLTF_SOURCES} tools/meshloader.cpp)
+        target_compile_definitions(gltfpack PUBLIC MESHOPT_BUILD_GLTFPACK_LIB)
+    else()
+        add_executable(gltfpack ${GLTF_SOURCES} tools/meshloader.cpp)
+        target_link_libraries(gltfpack meshoptimizer)
+        list(APPEND TARGETS gltfpack)
 
-    if(MESHOPT_BUILD_SHARED_LIBS)
-        string(CONCAT RPATH "$ORIGIN/../" ${CMAKE_INSTALL_LIBDIR})
-        set_target_properties(gltfpack PROPERTIES INSTALL_RPATH ${RPATH})
+        if(MESHOPT_BUILD_SHARED_LIBS)
+            string(CONCAT RPATH "$ORIGIN/../" ${CMAKE_INSTALL_LIBDIR})
+            set_target_properties(gltfpack PROPERTIES INSTALL_RPATH ${RPATH})
+        endif()
     endif()
 endif()
 

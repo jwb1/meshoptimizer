@@ -142,7 +142,7 @@ bool checkBasis(bool verbose)
 
 	int rc = execute(cmd.c_str(), /* ignore_stdout= */ true, /* ignore_stderr= */ true);
 	if (verbose)
-		printf("%s => %d\n", cmd.c_str(), rc);
+		printfStdout("%s => %d\n", cmd.c_str(), rc);
 
 	return rc == 0;
 }
@@ -199,7 +199,7 @@ bool encodeBasis(const std::string& data, const char* mime_type, std::string& re
 
 	int rc = execute(cmd.c_str(), /* ignore_stdout= */ true, /* ignore_stderr= */ false);
 	if (verbose)
-		printf("%s => %d\n", cmd.c_str(), rc);
+		printfStdout("%s => %d\n", cmd.c_str(), rc);
 
 	return rc == 0 && readFile(temp_output.path.c_str(), result);
 }
@@ -213,7 +213,7 @@ bool checkKtx(bool verbose)
 
 	int rc = execute(cmd.c_str(), /* ignore_stdout= */ true, /* ignore_stderr= */ true);
 	if (verbose)
-		printf("%s => %d\n", cmd.c_str(), rc);
+		printfStdout("%s => %d\n", cmd.c_str(), rc);
 
 	return rc == 0;
 }
@@ -386,7 +386,7 @@ bool encodeKtx(const std::string& data, const char* mime_type, std::string& resu
 
 	int rc = execute(cmd.c_str(), /* ignore_stdout= */ false, /* ignore_stderr= */ false);
 	if (verbose)
-		printf("%s => %d\n", cmd.c_str(), rc);
+		printfStdout("%s => %d\n", cmd.c_str(), rc);
 
 	return rc == 0 && readFile(temp_output.path.c_str(), result);
 }

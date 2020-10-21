@@ -14,6 +14,7 @@
 #include "../extern/cgltf.h"
 
 #include <assert.h>
+#include <stdarg.h>
 
 #include <string>
 #include <vector>
@@ -228,6 +229,17 @@ struct TempFile
 	TempFile(const char* suffix);
 	~TempFile();
 };
+
+typedef void (*printfLikeFunction)(const char* format_string, va_list args);
+
+void overrideStdout(printfLikeFunction fn);
+void overrideStderr(printfLikeFunction fn);
+
+void printfStdout(const char* format_string, ...);
+void printfStderr(const char* format_string, ...);
+
+void process(cgltf_data* data, const char* input_path, const char* output_path, const char* report_path, std::vector<Mesh>& meshes, std::vector<Animation>& animations, const std::string& extras, const Settings& settings, std::string& json, std::string& bin, std::string& fallback, size_t& fallback_size);
+std::string getBufferSpec(const char* bin_path, size_t bin_size, const char* fallback_path, size_t fallback_size, bool fallback_ref);
 
 std::string getFullPath(const char* path, const char* base_path);
 std::string getFileName(const char* path);

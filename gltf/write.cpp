@@ -660,7 +660,7 @@ void writeImage(std::string& json, std::vector<BufferView>& views, const cgltf_i
 
 			if (!readFile(full_path.c_str(), img_data))
 			{
-				fprintf(stderr, "Warning: unable to read image %s, skipping\n", image.uri);
+				printfStderr("Warning: unable to read image %s, skipping\n", image.uri);
 			}
 		}
 
@@ -688,7 +688,7 @@ void writeImage(std::string& json, std::vector<BufferView>& views, const cgltf_i
 			}
 			else
 			{
-				fprintf(stderr, "Warning: unable to encode image %d, skipping\n", int(index));
+				printfStderr("Warning: unable to encode image %d, skipping\n", int(index));
 			}
 		}
 		else
@@ -721,17 +721,17 @@ void writeImage(std::string& json, std::vector<BufferView>& views, const cgltf_i
 					}
 					else
 					{
-						fprintf(stderr, "Warning: unable to save encoded image %s, skipping\n", image.uri);
+						printfStderr("Warning: unable to save encoded image %s, skipping\n", image.uri);
 					}
 				}
 				else
 				{
-					fprintf(stderr, "Warning: unable to encode image %s, skipping\n", image.uri);
+					printfStderr("Warning: unable to encode image %s, skipping\n", image.uri);
 				}
 			}
 			else
 			{
-				fprintf(stderr, "Warning: unable to read image %s, skipping\n", image.uri);
+				printfStderr("Warning: unable to read image %s, skipping\n", image.uri);
 			}
 		}
 		else
@@ -743,7 +743,7 @@ void writeImage(std::string& json, std::vector<BufferView>& views, const cgltf_i
 	}
 	else
 	{
-		fprintf(stderr, "Warning: ignoring image %d since it has no URI and no valid buffer data\n", int(index));
+		printfStderr("Warning: ignoring image %d since it has no URI and no valid buffer data\n", int(index));
 	}
 }
 
@@ -1152,7 +1152,7 @@ void writeAnimation(std::string& json, std::vector<BufferView>& views, std::stri
 
 	if (tracks.empty())
 	{
-		fprintf(stderr, "Warning: ignoring animation %d because it has no valid tracks\n", int(i));
+		printfStderr("Warning: ignoring animation %d because it has no valid tracks\n", int(i));
 		return;
 	}
 
@@ -1279,7 +1279,7 @@ void writeCamera(std::string& json, const cgltf_camera& camera)
 		break;
 
 	default:
-		fprintf(stderr, "Warning: skipping camera of unknown type\n");
+		printfStderr("Warning: skipping camera of unknown type\n");
 	}
 
 	append(json, "}");
