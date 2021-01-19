@@ -40,6 +40,7 @@ struct Transform
 
 struct Mesh
 {
+	int scene;
 	std::vector<cgltf_node*> nodes;
 	std::vector<Transform> instances;
 
@@ -61,6 +62,7 @@ struct Track
 	cgltf_node* node;
 	cgltf_animation_path_type path;
 
+	bool constant;
 	bool dummy;
 
 	size_t components; // 1 unless path is cgltf_animation_path_type_weights
@@ -86,6 +88,7 @@ struct Settings
 	int pos_bits;
 	int tex_bits;
 	int nrm_bits;
+	int col_bits;
 
 	int trn_bits;
 	int rot_bits;
@@ -158,6 +161,8 @@ struct StreamFormat
 
 struct NodeInfo
 {
+	int scene;
+
 	bool keep;
 	bool animated;
 
@@ -243,6 +248,8 @@ std::string getBufferSpec(const char* bin_path, size_t bin_size, const char* fal
 
 std::string getFullPath(const char* path, const char* base_path);
 std::string getFileName(const char* path);
+std::string getExtension(const char* path);
+
 bool readFile(const char* path, std::string& data);
 bool writeFile(const char* path, const std::string& data);
 
@@ -253,7 +260,7 @@ void processAnimation(Animation& animation, const Settings& settings);
 void processMesh(Mesh& mesh, const Settings& settings);
 
 void debugSimplify(const Mesh& mesh, Mesh& kinds, Mesh& loops, float ratio);
-void debugMeshlets(const Mesh& mesh, Mesh& meshlets, Mesh& bounds, int max_vertices);
+void debugMeshlets(const Mesh& mesh, Mesh& meshlets, Mesh& bounds, int max_vertices, bool scan);
 
 bool compareMeshTargets(const Mesh& lhs, const Mesh& rhs);
 bool compareMeshNodes(const Mesh& lhs, const Mesh& rhs);
@@ -273,6 +280,7 @@ std::string basisToKtx(const std::string& data, bool srgb, bool uastc);
 bool checkKtx(bool verbose);
 bool encodeKtx(const std::string& data, const char* mime_type, std::string& result, bool normal_map, bool srgb, int quality, float scale, bool pow2, bool uastc, bool verbose);
 
+void markScenes(cgltf_data* data, std::vector<NodeInfo>& nodes);
 void markAnimated(cgltf_data* data, std::vector<NodeInfo>& nodes, const std::vector<Animation>& animations);
 void markNeededNodes(cgltf_data* data, std::vector<NodeInfo>& nodes, const std::vector<Mesh>& meshes, const std::vector<Animation>& animations, const Settings& settings);
 void remapNodes(cgltf_data* data, std::vector<NodeInfo>& nodes, size_t& node_offset);
@@ -321,6 +329,7 @@ void writeLight(std::string& json, const cgltf_light& light);
 void writeArray(std::string& json, const char* name, const std::string& contents);
 void writeExtensions(std::string& json, const ExtensionInfo* extensions, size_t count);
 void writeExtras(std::string& json, const std::string& data, const cgltf_extras& extras);
+void writeScene(std::string& json, const cgltf_scene& scene, const std::string& roots);
 
 /**
  * Copyright (c) 2016-2020 Arseny Kapoulkine

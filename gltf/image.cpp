@@ -5,10 +5,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-#ifdef __EMSCRIPTEN__
-#include <emscripten.h>
-#endif
-
 struct BasisSettings
 {
 	int etc1s_l;
@@ -58,6 +54,30 @@ void analyzeImages(cgltf_data* data, std::vector<ImageInfo>& images)
 				images[pbr.diffuse_texture.texture->image - data->images].srgb = true;
 		}
 
+		if (material.has_clearcoat)
+		{
+			const cgltf_clearcoat& clearcoat = material.clearcoat;
+
+			if (clearcoat.clearcoat_normal_texture.texture && clearcoat.clearcoat_normal_texture.texture->image)
+				images[clearcoat.clearcoat_normal_texture.texture->image - data->images].normal_map = true;
+		}
+
+		if (material.has_specular)
+		{
+			const cgltf_specular& specular = material.specular;
+
+			if (specular.specular_texture.texture && specular.specular_texture.texture->image)
+				images[specular.specular_texture.texture->image - data->images].srgb = true;
+		}
+
+		if (material.has_sheen)
+		{
+			const cgltf_sheen& sheen = material.sheen;
+
+			if (sheen.sheen_color_texture.texture && sheen.sheen_color_texture.texture->image)
+				images[sheen.sheen_color_texture.texture->image - data->images].srgb = true;
+		}
+
 		if (material.emissive_texture.texture && material.emissive_texture.texture->image)
 			images[material.emissive_texture.texture->image - data->images].srgb = true;
 
@@ -68,16 +88,10 @@ void analyzeImages(cgltf_data* data, std::vector<ImageInfo>& images)
 
 const char* inferMimeType(const char* path)
 {
-	const char* ext = strrchr(path, '.');
-	if (!ext)
-		return "";
-
-	std::string extl = ext;
-	for (size_t i = 0; i < extl.length(); ++i)
-		extl[i] = char(tolower(extl[i]));
+	std::string ext = getExtension(path);
 
 	for (size_t i = 0; i < sizeof(kMimeTypes) / sizeof(kMimeTypes[0]); ++i)
-		if (extl == kMimeTypes[i][1])
+		if (ext == kMimeTypes[i][1])
 			return kMimeTypes[i][0];
 
 	return "";
@@ -92,22 +106,16 @@ static const char* mimeExtension(const char* mime_type)
 	return ".raw";
 }
 
-#ifdef __EMSCRIPTEN__
-EM_JS(int, execute, (const char* cmd, bool ignore_stdout, bool ignore_stderr), {
-	var cp = require('child_process');
-	var stdio = [ 'ignore', ignore_stdout ? 'ignore' : 'inherit', ignore_stderr ? 'ignore' : 'inherit' ];
-	var ret = cp.spawnSync(UTF8ToString(cmd), [], {shell:true, stdio:stdio });
-	return ret.status == null ? 256 : ret.status;
-});
+#ifdef __wasi__
+static int execute(const char* cmd, bool ignore_stdout, bool ignore_stderr)
+{
+	return system(cmd);
+}
 
-EM_JS(const char*, readenv, (const char* name), {
-	var val = process.env[UTF8ToString(name)];
-	if (!val)
-		return 0;
-	var ret = _malloc(lengthBytesUTF8(val) + 1);
-	stringToUTF8(val, ret, lengthBytesUTF8(val) + 1);
-	return ret;
-});
+static const char* readenv(const char* name)
+{
+	return NULL;
+}
 #else
 static int execute(const char* cmd_, bool ignore_stdout, bool ignore_stderr)
 {

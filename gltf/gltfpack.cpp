@@ -8,11 +8,11 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "../src/meshoptimizer.h"
-
-#ifdef __EMSCRIPTEN__
-#include <emscripten.h>
+#ifdef __wasi__
+#include <unistd.h>
 #endif
+
+#include "../src/meshoptimizer.h"
 
 static printfLikeFunction stdoutFn = nullptr;
 
@@ -49,7 +49,7 @@ void printfStderr(const char* format_string, ...)
 	if (stderrFn)
 		stderrFn(format_string, arglist);
 	else
-		vfprintf(stderr, format_string, arglist);
+		vprintfStderr(format_string, arglist);
 
 	va_end(arglist);
 }
@@ -197,7 +197,7 @@ static void printAttributeStats(const std::vector<BufferView>& views, BufferView
 	}
 }
 
-static void printReport(const char* path, cgltf_data* data, const std::vector<BufferView>& views, const std::vector<Mesh>& meshes, size_t node_count, size_t mesh_count, size_t material_count, size_t animation_count, size_t json_size, size_t bin_size)
+static bool printReport(const char* path, cgltf_data* data, const std::vector<BufferView>& views, const std::vector<Mesh>& meshes, size_t node_count, size_t mesh_count, size_t material_count, size_t animation_count, size_t json_size, size_t bin_size)
 {
 	size_t bytes[BufferView::Kind_Count] = {};
 
@@ -226,7 +226,7 @@ static void printReport(const char* path, cgltf_data* data, const std::vector<Bu
 	if (!out)
 	{
 		printfStderr("Warning: cannot save report to %s\n", path);
-		return;
+		return false;
 	}
 
 	fprintf(out, "{\n");
@@ -256,7 +256,8 @@ static void printReport(const char* path, cgltf_data* data, const std::vector<Bu
 	fprintf(out, "\t}\n");
 	fprintf(out, "}\n");
 
-	fclose(out);
+	int rc = fclose(out);
+	return rc == 0;
 }
 
 void process(cgltf_data* data, const char* input_path, const char* output_path, const char* report_path, std::vector<Mesh>& meshes, std::vector<Animation>& animations, const std::string& extras, const Settings& settings, std::string& json, std::string& bin, std::string& fallback, size_t& fallback_size)
@@ -275,6 +276,7 @@ void process(cgltf_data* data, const char* input_path, const char* output_path, 
 
 	std::vector<NodeInfo> nodes(data->nodes_count);
 
+	markScenes(data, nodes);
 	markAnimated(data, nodes, animations);
 
 	for (size_t i = 0; i < meshes.size(); ++i)
@@ -304,6 +306,15 @@ void process(cgltf_data* data, const char* input_path, const char* output_path, 
 		if (any_animated)
 			continue;
 
+		int scene = nodes[mesh.nodes[0] - data->nodes].scene;
+		bool any_other_scene = false;
+		for (size_t j = 0; j < mesh.nodes.size(); ++j)
+			any_other_scene |= scene != nodes[mesh.nodes[j] - data->nodes].scene;
+
+		// we only merge instances when all nodes have a single consistent scene
+		if (scene < 0 || any_other_scene)
+			continue;
+
 		// we only merge multiple instances together if requested
 		// this often makes the scenes faster to render by reducing the draw call count, but can result in larger files
 		if (mesh.nodes.size() > 1 && !settings.mesh_merge && !settings.mesh_instancing)
@@ -323,6 +334,8 @@ void process(cgltf_data* data, const char* input_path, const char* output_path, 
 		{
 			mergeMeshInstances(mesh);
 		}
+
+		mesh.scene = scene;
 
 		assert(mesh.nodes.empty());
 	}
@@ -355,7 +368,7 @@ void process(cgltf_data* data, const char* input_path, const char* output_path, 
 		{
 			Mesh meshlets = {};
 			Mesh bounds = {};
-			debugMeshlets(meshes[i], meshlets, bounds, settings.meshlet_debug);
+			debugMeshlets(meshes[i], meshlets, bounds, settings.meshlet_debug, /* scan= */ false);
 			debug_meshes.push_back(meshlets);
 			debug_meshes.push_back(bounds);
 		}
@@ -392,16 +405,19 @@ void process(cgltf_data* data, const char* input_path, const char* output_path, 
 	std::string json_meshes;
 	std::string json_nodes;
 	std::string json_skins;
-	std::string json_roots;
+	std::vector<std::string> json_roots(data->scenes_count);
 	std::string json_animations;
 	std::string json_cameras;
-	std::string json_lights;
+	std::string json_extensions;
 
 	std::vector<BufferView> views;
 
 	bool ext_pbr_specular_glossiness = false;
 	bool ext_clearcoat = false;
 	bool ext_transmission = false;
+	bool ext_ior = false;
+	bool ext_specular = false;
+	bool ext_sheen = false;
 	bool ext_unlit = false;
 	bool ext_instancing = false;
 
@@ -460,6 +476,9 @@ void process(cgltf_data* data, const char* input_path, const char* output_path, 
 		ext_pbr_specular_glossiness = ext_pbr_specular_glossiness || material.has_pbr_specular_glossiness;
 		ext_clearcoat = ext_clearcoat || material.has_clearcoat;
 		ext_transmission = ext_transmission || material.has_transmission;
+		ext_ior = ext_ior || material.has_ior;
+		ext_specular = ext_specular || material.has_specular;
+		ext_sheen = ext_sheen || material.has_sheen;
 		ext_unlit = ext_unlit || material.unlit;
 	}
 
@@ -576,8 +595,9 @@ void process(cgltf_data* data, const char* input_path, const char* output_path, 
 		}
 		else if (mesh.instances.size())
 		{
-			comma(json_roots);
-			append(json_roots, node_offset);
+			assert(mesh.scene >= 0);
+			comma(json_roots[mesh.scene]);
+			append(json_roots[mesh.scene], node_offset);
 
 			size_t instance_accr = writeInstances(views, json_accessors, accr_offset, mesh.instances, qp, settings);
 
@@ -588,8 +608,9 @@ void process(cgltf_data* data, const char* input_path, const char* output_path, 
 		}
 		else
 		{
-			comma(json_roots);
-			append(json_roots, node_offset);
+			assert(mesh.scene >= 0);
+			comma(json_roots[mesh.scene]);
+			append(json_roots[mesh.scene], node_offset);
 
 			writeMeshNode(json_nodes, mesh_offset, NULL, mesh.skin, data, settings.quantize ? &qp : NULL);
 
@@ -614,18 +635,26 @@ void process(cgltf_data* data, const char* input_path, const char* output_path, 
 
 		const cgltf_node& node = data->nodes[i];
 
-		if (!node.parent)
-		{
-			comma(json_roots);
-			append(json_roots, size_t(ni.remap));
-		}
-
 		comma(json_nodes);
 		append(json_nodes, "{");
 		writeNode(json_nodes, node, nodes, data);
 		if (settings.keep_extras)
 			writeExtras(json_nodes, extras, node.extras);
 		append(json_nodes, "}");
+	}
+
+	for (size_t i = 0; i < data->scenes_count; ++i)
+	{
+		for (size_t j = 0; j < data->scenes[i].nodes_count; ++j)
+		{
+			NodeInfo& ni = nodes[data->scenes[i].nodes[j] - data->nodes];
+
+			if (ni.keep)
+			{
+				comma(json_roots[i]);
+				append(json_roots[i], size_t(ni.remap));
+			}
+		}
 	}
 
 	for (size_t i = 0; i < data->skins_count; ++i)
@@ -651,11 +680,19 @@ void process(cgltf_data* data, const char* input_path, const char* output_path, 
 		writeCamera(json_cameras, camera);
 	}
 
-	for (size_t i = 0; i < data->lights_count; ++i)
+	if (data->lights_count > 0)
 	{
-		const cgltf_light& light = data->lights[i];
+		comma(json_extensions);
+		append(json_extensions, "\"KHR_lights_punctual\":{\"lights\":[");
 
-		writeLight(json_lights, light);
+		for (size_t i = 0; i < data->lights_count; ++i)
+		{
+			const cgltf_light& light = data->lights[i];
+
+			writeLight(json_extensions, light);
+		}
+
+		append(json_extensions, "]}");
 	}
 
 	append(json, "\"asset\":{");
@@ -672,6 +709,9 @@ void process(cgltf_data* data, const char* input_path, const char* output_path, 
 	    {"KHR_materials_pbrSpecularGlossiness", ext_pbr_specular_glossiness, false},
 	    {"KHR_materials_clearcoat", ext_clearcoat, false},
 	    {"KHR_materials_transmission", ext_transmission, false},
+	    {"KHR_materials_ior", ext_ior, false},
+	    {"KHR_materials_specular", ext_specular, false},
+	    {"KHR_materials_sheen", ext_sheen, false},
 	    {"KHR_materials_unlit", ext_unlit, false},
 	    {"KHR_lights_punctual", data->lights_count > 0, false},
 	    {"KHR_texture_basisu", !json_textures.empty() && settings.texture_ktx2, true},
@@ -696,22 +736,26 @@ void process(cgltf_data* data, const char* input_path, const char* output_path, 
 	if (!json_roots.empty())
 	{
 		append(json, ",\"scenes\":[");
-		append(json, "{\"nodes\":[");
-		append(json, json_roots);
-		append(json, "]}]");
+
+		for (size_t i = 0; i < data->scenes_count; ++i)
+			writeScene(json, data->scenes[i], json_roots[i]);
+
+		append(json, "]");
 	}
 
 	writeArray(json, "cameras", json_cameras);
 
-	if (!json_lights.empty())
+	if (data->scene)
 	{
-		append(json, ",\"extensions\":{\"KHR_lights_punctual\":{\"lights\":[");
-		append(json, json_lights);
-		append(json, "]}}");
+		append(json, ",\"scene\":");
+		append(json, size_t(data->scene - data->scenes));
 	}
-	if (!json_roots.empty())
+
+	if (!json_extensions.empty())
 	{
-		append(json, ",\"scene\":0");
+		append(json, ",\"extensions\":{");
+		append(json, json_extensions);
+		append(json, "}");
 	}
 
 	if (settings.verbose)
@@ -730,7 +774,10 @@ void process(cgltf_data* data, const char* input_path, const char* output_path, 
 
 	if (report_path)
 	{
-		printReport(report_path, data, views, meshes, node_offset, mesh_offset, material_offset, animations.size(), json.size(), bin.size());
+		if (!printReport(report_path, data, views, meshes, node_offset, mesh_offset, material_offset, animations.size(), json.size(), bin.size()))
+		{
+			printfStderr("Warning: cannot save report to %s\n", report_path);
+		}
 	}
 }
 
@@ -796,10 +843,10 @@ int gltfpack(const char* input, const char* output, const char* report, Settings
 	std::vector<Animation> animations;
 	std::string extras;
 
-	const char* iext = strrchr(input, '.');
-	const char* oext = output ? strrchr(output, '.') : NULL;
+	std::string iext = getExtension(input);
+	std::string oext = output ? getExtension(output) : "";
 
-	if (iext && (strcmp(iext, ".gltf") == 0 || strcmp(iext, ".GLTF") == 0 || strcmp(iext, ".glb") == 0 || strcmp(iext, ".GLB") == 0))
+	if (iext == ".gltf" || iext == ".glb")
 	{
 		const char* error = 0;
 		data = parseGltf(input, meshes, animations, extras, &error);
@@ -810,7 +857,7 @@ int gltfpack(const char* input, const char* output, const char* report, Settings
 			return 2;
 		}
 	}
-	else if (iext && (strcmp(iext, ".obj") == 0 || strcmp(iext, ".OBJ") == 0))
+	else if (iext == ".obj")
 	{
 		const char* error = 0;
 		data = parseObj(input, meshes, &error);
@@ -846,7 +893,7 @@ int gltfpack(const char* input, const char* output, const char* report, Settings
 		}
 	}
 
-	if (oext && (strcmp(oext, ".glb") == 0 || strcmp(oext, ".GLB") == 0))
+	if (oext == ".glb")
 	{
 		settings.texture_embed = true;
 	}
@@ -862,7 +909,7 @@ int gltfpack(const char* input, const char* output, const char* report, Settings
 		return 0;
 	}
 
-	if (oext && (strcmp(oext, ".gltf") == 0 || strcmp(oext, ".GLTF") == 0))
+	if (oext == ".gltf")
 	{
 		std::string binpath = output;
 		binpath.replace(binpath.size() - 5, 5, ".bin");
@@ -892,12 +939,19 @@ int gltfpack(const char* input, const char* output, const char* report, Settings
 		if (settings.fallback)
 			fwrite(fallback.c_str(), fallback.size(), 1, outfb);
 
-		fclose(outjson);
-		fclose(outbin);
+		int rc = 0;
+		rc |= fclose(outjson);
+		rc |= fclose(outbin);
 		if (outfb)
-			fclose(outfb);
+			rc |= fclose(outfb);
+
+		if (rc)
+		{
+			printfStderr("Error saving %s\n", output);
+			return 4;
+		}
 	}
-	else if (oext && (strcmp(oext, ".glb") == 0 || strcmp(oext, ".GLB") == 0))
+	else if (oext == ".glb")
 	{
 		std::string fbpath = output;
 		fbpath.replace(fbpath.size() - 4, 4, ".fallback.bin");
@@ -936,9 +990,16 @@ int gltfpack(const char* input, const char* output, const char* report, Settings
 		if (settings.fallback)
 			fwrite(fallback.c_str(), fallback.size(), 1, outfb);
 
-		fclose(out);
+		int rc = 0;
+		rc |= fclose(out);
 		if (outfb)
-			fclose(outfb);
+			rc |= fclose(outfb);
+
+		if (rc)
+		{
+			printfStderr("Error saving %s\n", output);
+			return 4;
+		}
 	}
 	else
 	{
@@ -949,16 +1010,14 @@ int gltfpack(const char* input, const char* output, const char* report, Settings
 	return 0;
 }
 
-#ifndef MESHOPT_BUILD_GLTFPACK_LIB
-int main(int argc, char** argv)
+Settings defaults()
 {
-	meshopt_encodeIndexVersion(1);
-
 	Settings settings = {};
 	settings.quantize = true;
 	settings.pos_bits = 14;
 	settings.tex_bits = 12;
 	settings.nrm_bits = 8;
+	settings.col_bits = 8;
 	settings.trn_bits = 16;
 	settings.rot_bits = 12;
 	settings.scl_bits = 16;
@@ -966,6 +1025,16 @@ int main(int argc, char** argv)
 	settings.simplify_threshold = 1.f;
 	settings.texture_quality = 8;
 	settings.texture_scale = 1.f;
+
+	return settings;
+}
+
+#ifndef MESHOPT_BUILD_GLTFPACK_LIB
+int main(int argc, char** argv)
+{
+	meshopt_encodeIndexVersion(1);
+
+	Settings settings = defaults();
 
 	const char* input = 0;
 	const char* output = 0;
@@ -990,6 +1059,10 @@ int main(int argc, char** argv)
 		else if (strcmp(arg, "-vn") == 0 && i + 1 < argc && isdigit(argv[i + 1][0]))
 		{
 			settings.nrm_bits = atoi(argv[++i]);
+		}
+		else if (strcmp(arg, "-vc") == 0 && i + 1 < argc && isdigit(argv[i + 1][0]))
+		{
+			settings.col_bits = atoi(argv[++i]);
 		}
 		else if (strcmp(arg, "-at") == 0 && i + 1 < argc && isdigit(argv[i + 1][0]))
 		{
@@ -1069,6 +1142,10 @@ int main(int argc, char** argv)
 		else if (strcmp(arg, "-tp") == 0)
 		{
 			settings.texture_pow2 = true;
+		}
+		else if (strcmp(arg, "-te") == 0)
+		{
+			printfStderr("Warning: -te is deprecated and will be removed in the future; gltfpack now automatically embeds textures into GLB files\n");
 		}
 		else if (strcmp(arg, "-noq") == 0)
 		{
@@ -1176,6 +1253,7 @@ int main(int argc, char** argv)
 			printfStderr("\t-vp N: use N-bit quantization for positions (default: 14; N should be between 1 and 16)\n");
 			printfStderr("\t-vt N: use N-bit quantization for texture coordinates (default: 12; N should be between 1 and 16)\n");
 			printfStderr("\t-vn N: use N-bit quantization for normals and tangents (default: 8; N should be between 1 and 16)\n");
+			printfStderr("\t-vc N: use N-bit quantization for colors (default: 8; N should be between 1 and 16)\n");
 			printfStderr("\nAnimations:\n");
 			printfStderr("\t-at N: use N-bit quantization for translations (default: 16; N should be between 1 and 24)\n");
 			printfStderr("\t-ar N: use N-bit quantization for rotations (default: 12; N should be between 4 and 16)\n");
@@ -1223,4 +1301,15 @@ int main(int argc, char** argv)
 
 	return gltfpack(input, output, report, settings);
 }
+
+#ifdef __wasi__
+extern "C" int pack(int argc, char** argv)
+{
+	chdir("/gltfpack-$pwd");
+
+	int result = main(argc, argv);
+	fflush(NULL);
+	return result;
+}
+#endif
 #endif

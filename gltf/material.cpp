@@ -120,6 +120,45 @@ static bool areMaterialComponentsEqual(const cgltf_transmission& lhs, const cglt
 	return true;
 }
 
+static bool areMaterialComponentsEqual(const cgltf_ior& lhs, const cgltf_ior& rhs)
+{
+	if (lhs.ior != rhs.ior)
+		return false;
+
+	return true;
+}
+
+static bool areMaterialComponentsEqual(const cgltf_specular& lhs, const cgltf_specular& rhs)
+{
+	if (!areTextureViewsEqual(lhs.specular_texture, rhs.specular_texture))
+		return false;
+
+	if (memcmp(lhs.specular_color_factor, rhs.specular_color_factor, sizeof(cgltf_float) * 3) != 0)
+		return false;
+
+	if (lhs.specular_factor != rhs.specular_factor)
+		return false;
+
+	return true;
+}
+
+static bool areMaterialComponentsEqual(const cgltf_sheen& lhs, const cgltf_sheen& rhs)
+{
+	if (!areTextureViewsEqual(lhs.sheen_color_texture, rhs.sheen_color_texture))
+		return false;
+
+	if (memcmp(lhs.sheen_color_factor, rhs.sheen_color_factor, sizeof(cgltf_float) * 3) != 0)
+		return false;
+
+	if (!areTextureViewsEqual(lhs.sheen_roughness_texture, rhs.sheen_roughness_texture))
+		return false;
+
+	if (lhs.sheen_roughness_factor != rhs.sheen_roughness_factor)
+		return false;
+
+	return true;
+}
+
 static bool areMaterialsEqual(cgltf_data* data, const cgltf_material& lhs, const cgltf_material& rhs, const Settings& settings)
 {
 	if (lhs.has_pbr_metallic_roughness != rhs.has_pbr_metallic_roughness)
@@ -144,6 +183,24 @@ static bool areMaterialsEqual(cgltf_data* data, const cgltf_material& lhs, const
 		return false;
 
 	if (lhs.has_transmission && !areMaterialComponentsEqual(lhs.transmission, rhs.transmission))
+		return false;
+
+	if (lhs.has_ior != rhs.has_ior)
+		return false;
+
+	if (lhs.has_ior && !areMaterialComponentsEqual(lhs.ior, rhs.ior))
+		return false;
+
+	if (lhs.has_specular != rhs.has_specular)
+		return false;
+
+	if (lhs.has_specular && !areMaterialComponentsEqual(lhs.specular, rhs.specular))
+		return false;
+
+	if (lhs.has_sheen != rhs.has_sheen)
+		return false;
+
+	if (lhs.has_sheen && !areMaterialComponentsEqual(lhs.sheen, rhs.sheen))
 		return false;
 
 	if (!areTextureViewsEqual(lhs.normal_texture, rhs.normal_texture))
@@ -261,11 +318,32 @@ bool usesTextureSet(const cgltf_material& material, int set)
 	{
 		if (usesTextureSet(material.clearcoat.clearcoat_texture, set))
 			return true;
+
+		if (usesTextureSet(material.clearcoat.clearcoat_roughness_texture, set))
+			return true;
+
+		if (usesTextureSet(material.clearcoat.clearcoat_normal_texture, set))
+			return true;
 	}
 
 	if (material.has_transmission)
 	{
 		if (usesTextureSet(material.transmission.transmission_texture, set))
+			return true;
+	}
+
+	if (material.has_specular)
+	{
+		if (usesTextureSet(material.specular.specular_texture, set))
+			return true;
+	}
+
+	if (material.has_sheen)
+	{
+		if (usesTextureSet(material.sheen.sheen_color_texture, set))
+			return true;
+
+		if (usesTextureSet(material.sheen.sheen_roughness_texture, set))
 			return true;
 	}
 
