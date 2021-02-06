@@ -55,6 +55,8 @@ struct Mesh
 	size_t targets;
 	std::vector<float> target_weights;
 	std::vector<const char*> target_names;
+
+	std::vector<cgltf_material_mapping> variants;
 };
 
 struct Track
@@ -176,6 +178,10 @@ struct MaterialInfo
 {
 	bool keep;
 
+	bool usesTextureTransform;
+	bool needsTangents;
+	unsigned int textureSetMask;
+
 	int remap;
 };
 
@@ -257,24 +263,24 @@ cgltf_data* parseObj(const char* path, std::vector<Mesh>& meshes, const char** e
 cgltf_data* parseGltf(const char* path, std::vector<Mesh>& meshes, std::vector<Animation>& animations, std::string& extras, const char** error);
 
 void processAnimation(Animation& animation, const Settings& settings);
-void processMesh(Mesh& mesh, const Settings& settings);
+void processMesh(Mesh& mesh, const MaterialInfo& mi, const Settings& settings);
 
-void debugSimplify(const Mesh& mesh, Mesh& kinds, Mesh& loops, float ratio);
+void debugSimplify(const Mesh& mesh, const MaterialInfo& mi, Mesh& kinds, Mesh& loops, float ratio);
 void debugMeshlets(const Mesh& mesh, Mesh& meshlets, Mesh& bounds, int max_vertices, bool scan);
 
 bool compareMeshTargets(const Mesh& lhs, const Mesh& rhs);
+bool compareMeshVariants(const Mesh& lhs, const Mesh& rhs);
 bool compareMeshNodes(const Mesh& lhs, const Mesh& rhs);
+
 void mergeMeshInstances(Mesh& mesh);
 void mergeMeshes(std::vector<Mesh>& meshes, const Settings& settings);
 void filterEmptyMeshes(std::vector<Mesh>& meshes);
 
-bool usesTextureSet(const cgltf_material& material, int set);
-bool usesTextureTransform(const cgltf_material& material);
-
 void mergeMeshMaterials(cgltf_data* data, std::vector<Mesh>& meshes, const Settings& settings);
 void markNeededMaterials(cgltf_data* data, std::vector<MaterialInfo>& materials, const std::vector<Mesh>& meshes, const Settings& settings);
 
-void analyzeImages(cgltf_data* data, std::vector<ImageInfo>& images);
+void analyzeMaterials(cgltf_data* data, std::vector<MaterialInfo>& materials, std::vector<ImageInfo>& images);
+
 const char* inferMimeType(const char* path);
 bool checkBasis(bool verbose);
 bool encodeBasis(const std::string& data, const char* mime_type, std::string& result, bool normal_map, bool srgb, int quality, float scale, bool pow2, bool uastc, bool verbose);
@@ -289,7 +295,7 @@ void remapNodes(cgltf_data* data, std::vector<NodeInfo>& nodes, size_t& node_off
 void decomposeTransform(float translation[3], float rotation[4], float scale[3], const float* transform);
 
 QuantizationPosition prepareQuantizationPosition(const std::vector<Mesh>& meshes, const Settings& settings);
-void prepareQuantizationTexture(cgltf_data* data, std::vector<QuantizationTexture>& result, const std::vector<Mesh>& meshes, const Settings& settings);
+void prepareQuantizationTexture(cgltf_data* data, std::vector<QuantizationTexture>& result, std::vector<size_t>& indices, const std::vector<Mesh>& meshes, const Settings& settings);
 void getPositionBounds(float min[3], float max[3], const Stream& stream, const QuantizationPosition* qp);
 
 StreamFormat writeVertexStream(std::string& bin, const Stream& stream, const QuantizationPosition& qp, const QuantizationTexture& qt, const Settings& settings);

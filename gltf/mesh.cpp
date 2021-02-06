@@ -131,6 +131,23 @@ bool compareMeshTargets(const Mesh& lhs, const Mesh& rhs)
 	return true;
 }
 
+bool compareMeshVariants(const Mesh& lhs, const Mesh& rhs)
+{
+	if (lhs.variants.size() != rhs.variants.size())
+		return false;
+
+	for (size_t i = 0; i < lhs.variants.size(); ++i)
+	{
+		if (lhs.variants[i].variant != rhs.variants[i].variant)
+			return false;
+
+		if (lhs.variants[i].material != rhs.variants[i].material)
+			return false;
+	}
+
+	return true;
+}
+
 bool compareMeshNodes(const Mesh& lhs, const Mesh& rhs)
 {
 	if (lhs.nodes.size() != rhs.nodes.size())
@@ -196,6 +213,9 @@ static bool canMergeMeshes(const Mesh& lhs, const Mesh& rhs, const Settings& set
 		return false;
 
 	if (!compareMeshTargets(lhs, rhs))
+		return false;
+
+	if (!compareMeshVariants(lhs, rhs))
 		return false;
 
 	if (lhs.indices.empty() != rhs.indices.empty())
@@ -378,7 +398,7 @@ static bool hasDeltas(const std::vector<Attr>& data)
 	return false;
 }
 
-static void filterStreams(Mesh& mesh)
+static void filterStreams(Mesh& mesh, const MaterialInfo& mi)
 {
 	bool morph_normal = false;
 	bool morph_tangent = false;
@@ -394,7 +414,7 @@ static void filterStreams(Mesh& mesh)
 			morph_tangent = morph_tangent || (stream.type == cgltf_attribute_type_tangent && hasDeltas(stream.data));
 		}
 
-		if (stream.type == cgltf_attribute_type_texcoord && mesh.material && usesTextureSet(*mesh.material, stream.index))
+		if (stream.type == cgltf_attribute_type_texcoord && (mi.textureSetMask & (1u << stream.index)) != 0)
 		{
 			keep_texture_set = std::max(keep_texture_set, stream.index);
 		}
@@ -409,7 +429,7 @@ static void filterStreams(Mesh& mesh)
 		if (stream.type == cgltf_attribute_type_texcoord && stream.index > keep_texture_set)
 			continue;
 
-		if (stream.type == cgltf_attribute_type_tangent && (!mesh.material || !mesh.material->normal_texture.texture))
+		if (stream.type == cgltf_attribute_type_tangent && !mi.needsTangents)
 			continue;
 
 		if ((stream.type == cgltf_attribute_type_joints || stream.type == cgltf_attribute_type_weights) && !mesh.skin)
@@ -725,9 +745,9 @@ static void sortPointMesh(Mesh& mesh)
 	}
 }
 
-void processMesh(Mesh& mesh, const Settings& settings)
+void processMesh(Mesh& mesh, const MaterialInfo& mi, const Settings& settings)
 {
-	filterStreams(mesh);
+	filterStreams(mesh, mi);
 
 	switch (mesh.type)
 	{
@@ -759,14 +779,14 @@ extern unsigned char* meshopt_simplifyDebugKind;
 extern unsigned int* meshopt_simplifyDebugLoop;
 extern unsigned int* meshopt_simplifyDebugLoopBack;
 
-void debugSimplify(const Mesh& source, Mesh& kinds, Mesh& loops, float ratio)
+void debugSimplify(const Mesh& source, const MaterialInfo& mi, Mesh& kinds, Mesh& loops, float ratio)
 {
 	Mesh mesh = source;
 	assert(mesh.type == cgltf_primitive_type_triangles);
 
 	// note: it's important to follow the same pipeline as processMesh
 	// otherwise the result won't match
-	filterStreams(mesh);
+	filterStreams(mesh, mi);
 	filterBones(mesh);
 	reindexMesh(mesh);
 	filterTriangles(mesh);

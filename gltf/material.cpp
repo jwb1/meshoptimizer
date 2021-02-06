@@ -133,10 +133,13 @@ static bool areMaterialComponentsEqual(const cgltf_specular& lhs, const cgltf_sp
 	if (!areTextureViewsEqual(lhs.specular_texture, rhs.specular_texture))
 		return false;
 
-	if (memcmp(lhs.specular_color_factor, rhs.specular_color_factor, sizeof(cgltf_float) * 3) != 0)
+	if (!areTextureViewsEqual(lhs.specular_color_texture, rhs.specular_color_texture))
 		return false;
 
 	if (lhs.specular_factor != rhs.specular_factor)
+		return false;
+
+	if (memcmp(lhs.specular_color_factor, rhs.specular_color_factor, sizeof(cgltf_float) * 3) != 0)
 		return false;
 
 	return true;
@@ -154,6 +157,23 @@ static bool areMaterialComponentsEqual(const cgltf_sheen& lhs, const cgltf_sheen
 		return false;
 
 	if (lhs.sheen_roughness_factor != rhs.sheen_roughness_factor)
+		return false;
+
+	return true;
+}
+
+static bool areMaterialComponentsEqual(const cgltf_volume& lhs, const cgltf_volume& rhs)
+{
+	if (!areTextureViewsEqual(lhs.thickness_texture, rhs.thickness_texture))
+		return false;
+
+	if (lhs.thickness_factor != rhs.thickness_factor)
+		return false;
+
+	if (memcmp(lhs.attenuation_color, rhs.attenuation_color, sizeof(cgltf_float) * 3) != 0)
+		return false;
+
+	if (lhs.attenuation_distance != rhs.attenuation_distance)
 		return false;
 
 	return true;
@@ -203,6 +223,12 @@ static bool areMaterialsEqual(cgltf_data* data, const cgltf_material& lhs, const
 	if (lhs.has_sheen && !areMaterialComponentsEqual(lhs.sheen, rhs.sheen))
 		return false;
 
+	if (lhs.has_volume != rhs.has_volume)
+		return false;
+
+	if (lhs.has_volume && !areMaterialComponentsEqual(lhs.volume, rhs.volume))
+		return false;
+
 	if (!areTextureViewsEqual(lhs.normal_texture, rhs.normal_texture))
 		return false;
 
@@ -235,27 +261,37 @@ static bool areMaterialsEqual(cgltf_data* data, const cgltf_material& lhs, const
 
 void mergeMeshMaterials(cgltf_data* data, std::vector<Mesh>& meshes, const Settings& settings)
 {
-	for (size_t i = 0; i < meshes.size(); ++i)
+	std::vector<cgltf_material*> material_remap(data->materials_count);
+
+	for (size_t i = 0; i < data->materials_count; ++i)
 	{
-		Mesh& mesh = meshes[i];
+		material_remap[i] = &data->materials[i];
 
-		if (!mesh.material)
+		if (settings.keep_materials && data->materials[i].name && *data->materials[i].name)
 			continue;
 
-		if (settings.keep_materials && mesh.material->name && *mesh.material->name)
-			continue;
-
-		for (int j = 0; j < mesh.material - data->materials; ++j)
+		for (size_t j = 0; j < i; ++j)
 		{
 			if (settings.keep_materials && data->materials[j].name && *data->materials[j].name)
 				continue;
 
-			if (areMaterialsEqual(data, *mesh.material, data->materials[j], settings))
+			if (areMaterialsEqual(data, data->materials[i], data->materials[j], settings))
 			{
-				mesh.material = &data->materials[j];
+				material_remap[i] = &data->materials[j];
 				break;
 			}
 		}
+	}
+
+	for (size_t i = 0; i < meshes.size(); ++i)
+	{
+		Mesh& mesh = meshes[i];
+
+		if (mesh.material)
+			mesh.material = material_remap[mesh.material - data->materials];
+
+		for (size_t j = 0; j < mesh.variants.size(); ++j)
+			mesh.variants[j].material = material_remap[mesh.variants[j].material - data->materials];
 	}
 }
 
@@ -269,6 +305,13 @@ void markNeededMaterials(cgltf_data* data, std::vector<MaterialInfo>& materials,
 		if (mesh.material)
 		{
 			MaterialInfo& mi = materials[mesh.material - data->materials];
+
+			mi.keep = true;
+		}
+
+		for (size_t j = 0; j < mesh.variants.size(); ++j)
+		{
+			MaterialInfo& mi = materials[mesh.variants[j].material - data->materials];
 
 			mi.keep = true;
 		}
@@ -289,98 +332,79 @@ void markNeededMaterials(cgltf_data* data, std::vector<MaterialInfo>& materials,
 	}
 }
 
-template <typename Pred>
-static bool materialHasProperty(const cgltf_material& material, Pred pred)
+enum TextureKind
+{
+	TextureKind_Generic,
+	TextureKind_Color,
+	TextureKind_Normal,
+};
+
+static void analyzeMaterialTexture(const cgltf_texture_view& view, TextureKind kind, MaterialInfo& mi, cgltf_data* data, std::vector<ImageInfo>& images)
+{
+	mi.usesTextureTransform |= bool(view.has_transform);
+
+	if (view.texture && view.texture->image)
+	{
+		mi.textureSetMask |= 1u << view.texcoord;
+		mi.needsTangents |= (kind == TextureKind_Normal);
+
+		images[view.texture->image - data->images].srgb |= (kind == TextureKind_Color);
+		images[view.texture->image - data->images].normal_map |= (kind == TextureKind_Normal);
+	}
+}
+
+static void analyzeMaterial(const cgltf_material& material, MaterialInfo& mi, cgltf_data* data, std::vector<ImageInfo>& images)
 {
 	if (material.has_pbr_metallic_roughness)
 	{
-		if (pred(material.pbr_metallic_roughness.base_color_texture))
-			return true;
-
-		if (pred(material.pbr_metallic_roughness.metallic_roughness_texture))
-			return true;
+		analyzeMaterialTexture(material.pbr_metallic_roughness.base_color_texture, TextureKind_Color, mi, data, images);
+		analyzeMaterialTexture(material.pbr_metallic_roughness.metallic_roughness_texture, TextureKind_Generic, mi, data, images);
 	}
 
 	if (material.has_pbr_specular_glossiness)
 	{
-		if (pred(material.pbr_specular_glossiness.diffuse_texture))
-			return true;
-
-		if (pred(material.pbr_specular_glossiness.specular_glossiness_texture))
-			return true;
+		analyzeMaterialTexture(material.pbr_specular_glossiness.diffuse_texture, TextureKind_Color, mi, data, images);
+		analyzeMaterialTexture(material.pbr_specular_glossiness.specular_glossiness_texture, TextureKind_Generic, mi, data, images);
 	}
 
 	if (material.has_clearcoat)
 	{
-		if (pred(material.clearcoat.clearcoat_texture))
-			return true;
-
-		if (pred(material.clearcoat.clearcoat_roughness_texture))
-			return true;
-
-		if (pred(material.clearcoat.clearcoat_normal_texture))
-			return true;
+		analyzeMaterialTexture(material.clearcoat.clearcoat_texture, TextureKind_Generic, mi, data, images);
+		analyzeMaterialTexture(material.clearcoat.clearcoat_roughness_texture, TextureKind_Generic, mi, data, images);
+		analyzeMaterialTexture(material.clearcoat.clearcoat_normal_texture, TextureKind_Normal, mi, data, images);
 	}
 
 	if (material.has_transmission)
 	{
-		if (pred(material.transmission.transmission_texture))
-			return true;
+		analyzeMaterialTexture(material.transmission.transmission_texture, TextureKind_Generic, mi, data, images);
 	}
 
 	if (material.has_specular)
 	{
-		if (pred(material.specular.specular_texture))
-			return true;
+		analyzeMaterialTexture(material.specular.specular_texture, TextureKind_Generic, mi, data, images);
+		analyzeMaterialTexture(material.specular.specular_color_texture, TextureKind_Color, mi, data, images);
 	}
 
 	if (material.has_sheen)
 	{
-		if (pred(material.sheen.sheen_color_texture))
-			return true;
-
-		if (pred(material.sheen.sheen_roughness_texture))
-			return true;
+		analyzeMaterialTexture(material.sheen.sheen_color_texture, TextureKind_Color, mi, data, images);
+		analyzeMaterialTexture(material.sheen.sheen_roughness_texture, TextureKind_Generic, mi, data, images);
 	}
 
-	if (pred(material.normal_texture))
-		return true;
+	if (material.has_volume)
+	{
+		analyzeMaterialTexture(material.volume.thickness_texture, TextureKind_Generic, mi, data, images);
+	}
 
-	if (pred(material.occlusion_texture))
-		return true;
-
-	if (pred(material.emissive_texture))
-		return true;
-
-	return false;
+	analyzeMaterialTexture(material.normal_texture, TextureKind_Normal, mi, data, images);
+	analyzeMaterialTexture(material.occlusion_texture, TextureKind_Generic, mi, data, images);
+	analyzeMaterialTexture(material.emissive_texture, TextureKind_Color, mi, data, images);
 }
 
-struct UsesTextureSet
+void analyzeMaterials(cgltf_data* data, std::vector<MaterialInfo>& materials, std::vector<ImageInfo>& images)
 {
-	int set;
-
-	bool operator()(const cgltf_texture_view& view) const
+	for (size_t i = 0; i < data->materials_count; ++i)
 	{
-		return view.texture && view.texcoord == set;
+		analyzeMaterial(data->materials[i], materials[i], data, images);
 	}
-};
-
-bool usesTextureSet(const cgltf_material& material, int set)
-{
-	UsesTextureSet pred = {set};
-
-	return materialHasProperty(material, pred);
-}
-
-struct UsesTextureTransform
-{
-	bool operator()(const cgltf_texture_view& view) const
-	{
-		return view.has_transform;
-	}
-};
-
-bool usesTextureTransform(const cgltf_material& material)
-{
-	return materialHasProperty(material, UsesTextureTransform());
 }
