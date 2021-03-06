@@ -49,7 +49,7 @@ void printfStderr(const char* format_string, ...)
 	if (stderrFn)
 		stderrFn(format_string, arglist);
 	else
-		vprintfStderr(format_string, arglist);
+		vfprintf(stderr, format_string, arglist);
 
 	va_end(arglist);
 }
