@@ -340,16 +340,35 @@ void process(cgltf_data* data, const char* input_path, const char* output_path, 
 		assert(mesh.nodes.empty());
 	}
 
+	// material information is required for mesh and image processing
+	std::vector<MaterialInfo> materials(data->materials_count);
+	std::vector<ImageInfo> images(data->images_count);
+
+	analyzeMaterials(data, materials, images);
+
+	// streams need to be filtered before mesh merging (or processing) to make sure we can merge meshes with redundant streams
+	for (size_t i = 0; i < meshes.size(); ++i)
+	{
+		Mesh& mesh = meshes[i];
+		MaterialInfo mi = mesh.material ? materials[mesh.material - data->materials] : MaterialInfo();
+
+		// merge material requirements across all variants
+		for (size_t j = 0; j < mesh.variants.size(); ++j)
+		{
+			MaterialInfo vi = materials[mesh.variants[j].material - data->materials];
+
+			mi.needsTangents |= vi.needsTangents;
+			mi.textureSetMask |= vi.textureSetMask;
+		}
+
+		filterStreams(mesh, mi);
+	}
+
 	mergeMeshMaterials(data, meshes, settings);
 	mergeMeshes(meshes, settings);
 	filterEmptyMeshes(meshes);
 
 	markNeededNodes(data, nodes, meshes, animations, settings);
-
-	std::vector<MaterialInfo> materials(data->materials_count);
-	std::vector<ImageInfo> images(data->images_count);
-
-	analyzeMaterials(data, materials, images);
 	markNeededMaterials(data, materials, meshes, settings);
 
 #ifndef NDEBUG
@@ -361,11 +380,9 @@ void process(cgltf_data* data, const char* input_path, const char* output_path, 
 
 		if (settings.simplify_debug > 0)
 		{
-			MaterialInfo mi = mesh.material ? materials[mesh.material - data->materials] : MaterialInfo();
-
 			Mesh kinds = {};
 			Mesh loops = {};
-			debugSimplify(mesh, mi, kinds, loops, settings.simplify_debug);
+			debugSimplify(mesh, kinds, loops, settings.simplify_debug);
 			debug_meshes.push_back(kinds);
 			debug_meshes.push_back(loops);
 		}
@@ -383,19 +400,7 @@ void process(cgltf_data* data, const char* input_path, const char* output_path, 
 
 	for (size_t i = 0; i < meshes.size(); ++i)
 	{
-		Mesh& mesh = meshes[i];
-		MaterialInfo mi = mesh.material ? materials[mesh.material - data->materials] : MaterialInfo();
-
-		// merge material requirements across all variants
-		for (size_t j = 0; j < mesh.variants.size(); ++j)
-		{
-			MaterialInfo vi = materials[mesh.variants[j].material - data->materials];
-
-			mi.needsTangents |= vi.needsTangents;
-			mi.textureSetMask |= vi.textureSetMask;
-		}
-
-		processMesh(mesh, mi, settings);
+		processMesh(meshes[i], settings);
 	}
 
 #ifndef NDEBUG
@@ -943,12 +948,19 @@ int gltfpack(const char* input, const char* output, const char* report, Settings
 		else if (!checkBasis(settings.verbose > 1))
 		{
 			printfStderr("Error: toktx is not present in PATH or TOKTX_PATH is not set\n");
+			printfStderr("Note: toktx must be installed manually from https://github.com/KhronosGroup/KTX-Software/releases\n");
 			return 3;
 		}
 
 		if (settings.texture_scale < 1 && !settings.texture_toktx)
 		{
 			printfStderr("Error: -ts option is only supported by toktx\n");
+			return 3;
+		}
+
+		if (settings.texture_pow2 && !settings.texture_toktx)
+		{
+			printfStderr("Error: -tp option is only supported by toktx\n");
 			return 3;
 		}
 	}
