@@ -137,8 +137,8 @@ static void printMeshStats(const std::vector<Mesh>& meshes, const char* name)
 	}
 
 	printfStdout("%s: %d mesh primitives (%d triangles, %d vertices); %d draw calls (%d instances, %lld triangles)\n", name,
-	       int(meshes.size()), int(mesh_triangles), int(mesh_vertices),
-	       int(total_draws), int(total_instances), (long long)total_triangles);
+	    int(meshes.size()), int(mesh_triangles), int(mesh_vertices),
+	    int(total_draws), int(total_instances), (long long)total_triangles);
 }
 
 static void printSceneStats(const std::vector<BufferView>& views, const std::vector<Mesh>& meshes, size_t node_offset, size_t mesh_offset, size_t material_offset, size_t json_size, size_t bin_size)
@@ -154,9 +154,9 @@ static void printSceneStats(const std::vector<BufferView>& views, const std::vec
 	printfStdout("output: %d nodes, %d meshes (%d primitives), %d materials\n", int(node_offset), int(mesh_offset), int(meshes.size()), int(material_offset));
 	printfStdout("output: JSON %d bytes, buffers %d bytes\n", int(json_size), int(bin_size));
 	printfStdout("output: buffers: vertex %d bytes, index %d bytes, skin %d bytes, time %d bytes, keyframe %d bytes, instance %d bytes, image %d bytes\n",
-	       int(bytes[BufferView::Kind_Vertex]), int(bytes[BufferView::Kind_Index]), int(bytes[BufferView::Kind_Skin]),
-	       int(bytes[BufferView::Kind_Time]), int(bytes[BufferView::Kind_Keyframe]), int(bytes[BufferView::Kind_Instance]),
-	       int(bytes[BufferView::Kind_Image]));
+	    int(bytes[BufferView::Kind_Vertex]), int(bytes[BufferView::Kind_Index]), int(bytes[BufferView::Kind_Skin]),
+	    int(bytes[BufferView::Kind_Time]), int(bytes[BufferView::Kind_Keyframe]), int(bytes[BufferView::Kind_Instance]),
+	    int(bytes[BufferView::Kind_Image]));
 }
 
 static void printAttributeStats(const std::vector<BufferView>& views, BufferView::Kind kind, const char* name)
@@ -191,10 +191,33 @@ static void printAttributeStats(const std::vector<BufferView>& views, BufferView
 		size_t count = view.data.size() / view.stride;
 
 		printfStdout("stats: %s %s: compressed %d bytes (%.1f bits), raw %d bytes (%d bits)\n",
-		       name, variant,
-		       int(view.bytes), double(view.bytes) / double(count) * 8,
-		       int(view.data.size()), int(view.stride * 8));
+		    name, variant,
+		    int(view.bytes), double(view.bytes) / double(count) * 8,
+		    int(view.data.size()), int(view.stride * 8));
 	}
+}
+
+static void printImageStats(const std::vector<BufferView>& views, TextureKind kind, const char* name)
+{
+	size_t bytes = 0;
+	size_t count = 0;
+
+	for (size_t i = 0; i < views.size(); ++i)
+	{
+		const BufferView& view = views[i];
+
+		if (view.kind != BufferView::Kind_Image)
+			continue;
+
+		if (view.variant != -1 - kind)
+			continue;
+
+		count += 1;
+		bytes += view.data.size();
+	}
+
+	if (count)
+		printfStdout("stats: image %s: %d bytes in %d images\n", name, int(bytes), int(count));
 }
 
 static bool printReport(const char* path, cgltf_data* data, const std::vector<BufferView>& views, const std::vector<Mesh>& meshes, size_t node_count, size_t mesh_count, size_t material_count, size_t animation_count, size_t json_size, size_t bin_size)
@@ -265,7 +288,7 @@ void process(cgltf_data* data, const char* input_path, const char* output_path, 
 	if (settings.verbose)
 	{
 		printfStdout("input: %d nodes, %d meshes (%d primitives), %d materials, %d skins, %d animations\n",
-		       int(data->nodes_count), int(data->meshes_count), int(meshes.size()), int(data->materials_count), int(data->skins_count), int(animations.size()));
+		    int(data->nodes_count), int(data->meshes_count), int(meshes.size()), int(data->materials_count), int(data->skins_count), int(animations.size()));
 		printMeshStats(meshes, "input");
 	}
 
@@ -346,6 +369,8 @@ void process(cgltf_data* data, const char* input_path, const char* output_path, 
 
 	analyzeMaterials(data, materials, images);
 
+	optimizeMaterials(data, input_path, images);
+
 	// streams need to be filtered before mesh merging (or processing) to make sure we can merge meshes with redundant streams
 	for (size_t i = 0; i < meshes.size(); ++i)
 	{
@@ -419,6 +444,7 @@ void process(cgltf_data* data, const char* input_path, const char* output_path, 
 	qt_dummy.bits = settings.tex_bits;
 
 	std::string json_images;
+	std::string json_samplers;
 	std::string json_textures;
 	std::string json_materials;
 	std::string json_accessors;
@@ -447,6 +473,16 @@ void process(cgltf_data* data, const char* input_path, const char* output_path, 
 	size_t node_offset = 0;
 	size_t mesh_offset = 0;
 	size_t material_offset = 0;
+
+	for (size_t i = 0; i < data->samplers_count; ++i)
+	{
+		const cgltf_sampler& sampler = data->samplers[i];
+
+		comma(json_samplers);
+		append(json_samplers, "{");
+		writeSampler(json_samplers, sampler);
+		append(json_samplers, "}");
+	}
 
 	for (size_t i = 0; i < data->images_count; ++i)
 	{
@@ -790,6 +826,7 @@ void process(cgltf_data* data, const char* input_path, const char* output_path, 
 
 	writeArray(json, "bufferViews", json_views);
 	writeArray(json, "accessors", json_accessors);
+	writeArray(json, "samplers", json_samplers);
 	writeArray(json, "images", json_images);
 	writeArray(json, "textures", json_textures);
 	writeArray(json, "materials", json_materials);
@@ -835,6 +872,11 @@ void process(cgltf_data* data, const char* input_path, const char* output_path, 
 		printAttributeStats(views, BufferView::Kind_Index, "index");
 		printAttributeStats(views, BufferView::Kind_Keyframe, "keyframe");
 		printAttributeStats(views, BufferView::Kind_Instance, "instance");
+
+		printImageStats(views, TextureKind_Generic, "generic");
+		printImageStats(views, TextureKind_Color, "color");
+		printImageStats(views, TextureKind_Normal, "normal");
+		printImageStats(views, TextureKind_Attrib, "attrib");
 	}
 
 	if (report_path)
@@ -1095,10 +1137,41 @@ Settings defaults()
 	settings.scl_bits = 16;
 	settings.anim_freq = 30;
 	settings.simplify_threshold = 1.f;
-	settings.texture_quality = 8;
 	settings.texture_scale = 1.f;
+	for (int kind = 0; kind < TextureKind__Count; ++kind)
+		settings.texture_quality[kind] = 8;
 
 	return settings;
+}
+
+template <typename T>
+T clamp(T v, T min, T max)
+{
+	return v < min ? min : v > max ? max : v;
+}
+
+unsigned int textureMask(const char* arg)
+{
+	unsigned int result = 0;
+
+	while (arg)
+	{
+		const char* comma = strchr(arg, ',');
+		size_t seg = comma ? comma - arg - 1 : strlen(arg);
+
+		if (strncmp(arg, "color", seg) == 0)
+			result |= 1 << TextureKind_Color;
+		else if (strncmp(arg, "normal", seg) == 0)
+			result |= 1 << TextureKind_Normal;
+		else if (strncmp(arg, "attrib", seg) == 0)
+			result |= 1 << TextureKind_Attrib;
+		else
+			printfStderr("Warning: unrecognized texture class %.*s\n", int(seg), arg);
+
+		arg = comma ? comma + 1 : NULL;
+	}
+
+	return result;
 }
 
 #ifndef MESHOPT_BUILD_GLTFPACK_LIB
@@ -1122,35 +1195,35 @@ int main(int argc, char** argv)
 
 		if (strcmp(arg, "-vp") == 0 && i + 1 < argc && isdigit(argv[i + 1][0]))
 		{
-			settings.pos_bits = atoi(argv[++i]);
+			settings.pos_bits = clamp(atoi(argv[++i]), 1, 16);
 		}
 		else if (strcmp(arg, "-vt") == 0 && i + 1 < argc && isdigit(argv[i + 1][0]))
 		{
-			settings.tex_bits = atoi(argv[++i]);
+			settings.tex_bits = clamp(atoi(argv[++i]), 1, 16);
 		}
 		else if (strcmp(arg, "-vn") == 0 && i + 1 < argc && isdigit(argv[i + 1][0]))
 		{
-			settings.nrm_bits = atoi(argv[++i]);
+			settings.nrm_bits = clamp(atoi(argv[++i]), 1, 16);
 		}
 		else if (strcmp(arg, "-vc") == 0 && i + 1 < argc && isdigit(argv[i + 1][0]))
 		{
-			settings.col_bits = atoi(argv[++i]);
+			settings.col_bits = clamp(atoi(argv[++i]), 1, 16);
 		}
 		else if (strcmp(arg, "-at") == 0 && i + 1 < argc && isdigit(argv[i + 1][0]))
 		{
-			settings.trn_bits = atoi(argv[++i]);
+			settings.trn_bits = clamp(atoi(argv[++i]), 1, 24);
 		}
 		else if (strcmp(arg, "-ar") == 0 && i + 1 < argc && isdigit(argv[i + 1][0]))
 		{
-			settings.rot_bits = atoi(argv[++i]);
+			settings.rot_bits = clamp(atoi(argv[++i]), 4, 16);
 		}
 		else if (strcmp(arg, "-as") == 0 && i + 1 < argc && isdigit(argv[i + 1][0]))
 		{
-			settings.scl_bits = atoi(argv[++i]);
+			settings.scl_bits = clamp(atoi(argv[++i]), 1, 24);
 		}
 		else if (strcmp(arg, "-af") == 0 && i + 1 < argc && isdigit(argv[i + 1][0]))
 		{
-			settings.anim_freq = atoi(argv[++i]);
+			settings.anim_freq = clamp(atoi(argv[++i]), 1, 100);
 		}
 		else if (strcmp(arg, "-ac") == 0)
 		{
@@ -1178,7 +1251,7 @@ int main(int argc, char** argv)
 		}
 		else if (strcmp(arg, "-si") == 0 && i + 1 < argc && isdigit(argv[i + 1][0]))
 		{
-			settings.simplify_threshold = float(atof(argv[++i]));
+			settings.simplify_threshold = clamp(float(atof(argv[++i])), 0.f, 1.f);
 		}
 		else if (strcmp(arg, "-sa") == 0)
 		{
@@ -1187,17 +1260,24 @@ int main(int argc, char** argv)
 #ifndef NDEBUG
 		else if (strcmp(arg, "-sd") == 0 && i + 1 < argc && isdigit(argv[i + 1][0]))
 		{
-			settings.simplify_debug = float(atof(argv[++i]));
+			settings.simplify_debug = clamp(float(atof(argv[++i])), 0.f, 1.f);
 		}
 		else if (strcmp(arg, "-md") == 0 && i + 1 < argc && isdigit(argv[i + 1][0]))
 		{
-			settings.meshlet_debug = atoi(argv[++i]);
+			settings.meshlet_debug = clamp(atoi(argv[++i]), 3, 255);
 		}
 #endif
 		else if (strcmp(arg, "-tu") == 0)
 		{
 			settings.texture_ktx2 = true;
-			settings.texture_uastc = true;
+
+			unsigned int mask = ~0u;
+			if (i + 1 < argc && isalpha(argv[i + 1][0]))
+				mask = textureMask(argv[++i]);
+
+			for (int kind = 0; kind < TextureKind__Count; ++kind)
+				if (mask & (1 << kind))
+					settings.texture_uastc[kind] = true;
 		}
 		else if (strcmp(arg, "-tc") == 0)
 		{
@@ -1205,15 +1285,30 @@ int main(int argc, char** argv)
 		}
 		else if (strcmp(arg, "-tq") == 0 && i + 1 < argc && isdigit(argv[i + 1][0]))
 		{
-			settings.texture_quality = atoi(argv[++i]);
+			int quality = clamp(atoi(argv[++i]), 1, 10);
+			for (int kind = 0; kind < TextureKind__Count; ++kind)
+				settings.texture_quality[kind] = quality;
+		}
+		else if (strcmp(arg, "-tq") == 0 && i + 2 < argc && isalpha(argv[i + 1][0]) && isdigit(argv[i + 2][0]))
+		{
+			unsigned int mask = textureMask(argv[++i]);
+			int quality = clamp(atoi(argv[++i]), 1, 10);
+
+			for (int kind = 0; kind < TextureKind__Count; ++kind)
+				if (mask & (1 << kind))
+					settings.texture_quality[kind] = quality;
 		}
 		else if (strcmp(arg, "-ts") == 0 && i + 1 < argc && isdigit(argv[i + 1][0]))
 		{
-			settings.texture_scale = float(atof(argv[++i]));
+			settings.texture_scale = clamp(float(atof(argv[++i])), 0.f, 1.f);
 		}
 		else if (strcmp(arg, "-tp") == 0)
 		{
 			settings.texture_pow2 = true;
+		}
+		else if (strcmp(arg, "-tfy") == 0)
+		{
+			settings.texture_flipy = true;
 		}
 		else if (strcmp(arg, "-te") == 0)
 		{
@@ -1318,6 +1413,11 @@ int main(int argc, char** argv)
 			printfStderr("\t-tq N: set texture encoding quality (default: 8; N should be between 1 and 10\n");
 			printfStderr("\t-ts R: scale texture dimensions by the ratio R (default: 1; R should be between 0 and 1)\n");
 			printfStderr("\t-tp: resize textures to nearest power of 2 to conform to WebGL1 restrictions\n");
+			printfStderr("\t-tfy: flip textures along Y axis during BasisU supercompression\n");
+			printfStderr("\tTexture classes:\n");
+			printfStderr("\t-tu C: use UASTC when encoding textures of class C\n");
+			printfStderr("\t-tq C N: set texture encoding quality for class C\n");
+			printfStderr("\t... where C is a comma-separated list (no spaces) with valid values color,normal,attrib\n");
 			printfStderr("\nSimplification:\n");
 			printfStderr("\t-si R: simplify meshes to achieve the ratio R (default: 1; R should be between 0 and 1)\n");
 			printfStderr("\t-sa: aggressively simplify to the target ratio disregarding quality\n");
@@ -1368,6 +1468,12 @@ int main(int argc, char** argv)
 	if (settings.texture_pow2 && !settings.texture_ktx2)
 	{
 		printfStderr("Option -tp is only supported when -tc is set as well\n");
+		return 1;
+	}
+
+	if (settings.texture_flipy && !settings.texture_ktx2)
+	{
+		printfStderr("Option -tfy is only supported when -tc is set as well\n");
 		return 1;
 	}
 

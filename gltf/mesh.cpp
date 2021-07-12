@@ -101,6 +101,9 @@ static void transformMesh(Mesh& target, const Mesh& mesh, const cgltf_node* node
 		}
 	}
 
+	// copy indices so that we can modify them below
+	target.indices = mesh.indices;
+
 	if (det < 0 && mesh.type == cgltf_primitive_type_triangles)
 	{
 		// negative scale means we need to flip face winding
@@ -776,9 +779,9 @@ void processMesh(Mesh& mesh, const Settings& settings)
 }
 
 #ifndef NDEBUG
-extern unsigned char* meshopt_simplifyDebugKind;
-extern unsigned int* meshopt_simplifyDebugLoop;
-extern unsigned int* meshopt_simplifyDebugLoopBack;
+extern MESHOPTIMIZER_API unsigned char* meshopt_simplifyDebugKind;
+extern MESHOPTIMIZER_API unsigned int* meshopt_simplifyDebugLoop;
+extern MESHOPTIMIZER_API unsigned int* meshopt_simplifyDebugLoopBack;
 
 void debugSimplify(const Mesh& source, Mesh& kinds, Mesh& loops, float ratio)
 {

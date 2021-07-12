@@ -720,47 +720,9 @@ static void writeAccessor(std::string& json, size_t view, size_t offset, cgltf_t
 	append(json, "}");
 }
 
-static bool parseDataUri(const char* uri, std::string& mime_type, std::string& result)
+static void writeEmbeddedImage(std::string& json, std::vector<BufferView>& views, const char* data, size_t size, const char* mime_type, TextureKind kind)
 {
-	if (strncmp(uri, "data:", 5) == 0)
-	{
-		const char* comma = strchr(uri, ',');
-
-		if (comma && comma - uri >= 7 && strncmp(comma - 7, ";base64", 7) == 0)
-		{
-			const char* base64 = comma + 1;
-			size_t base64_size = strlen(base64);
-			size_t size = base64_size - base64_size / 4;
-
-			if (base64_size >= 2)
-			{
-				size -= base64[base64_size - 2] == '=';
-				size -= base64[base64_size - 1] == '=';
-			}
-
-			void* data = 0;
-
-			cgltf_options options = {};
-			cgltf_result res = cgltf_load_buffer_base64(&options, size, base64, &data);
-
-			if (res != cgltf_result_success)
-				return false;
-
-			mime_type = std::string(uri + 5, comma - 7);
-			result = std::string(static_cast<const char*>(data), size);
-
-			free(data);
-
-			return true;
-		}
-	}
-
-	return false;
-}
-
-static void writeEmbeddedImage(std::string& json, std::vector<BufferView>& views, const char* data, size_t size, const char* mime_type)
-{
-	size_t view = getBufferView(views, BufferView::Kind_Image, StreamFormat::Filter_None, BufferView::Compression_None, 1, -1);
+	size_t view = getBufferView(views, BufferView::Kind_Image, StreamFormat::Filter_None, BufferView::Compression_None, 1, -1 - kind);
 
 	assert(views[view].data.empty());
 	views[view].data.assign(data, size);
@@ -785,113 +747,92 @@ static std::string decodeUri(const char* uri)
 	return result;
 }
 
+void writeSampler(std::string& json, const cgltf_sampler& sampler)
+{
+	if (sampler.mag_filter != 0)
+	{
+		comma(json);
+		append(json, "\"magFilter\":");
+		append(json, size_t(sampler.mag_filter));
+	}
+	if (sampler.min_filter != 0)
+	{
+		comma(json);
+		append(json, "\"minFilter\":");
+		append(json, size_t(sampler.min_filter));
+	}
+	if (sampler.wrap_s != 10497)
+	{
+		comma(json);
+		append(json, "\"wrapS\":");
+		append(json, size_t(sampler.wrap_s));
+	}
+	if (sampler.wrap_t != 10497)
+	{
+		comma(json);
+		append(json, "\"wrapT\":");
+		append(json, size_t(sampler.wrap_t));
+	}
+}
+
 void writeImage(std::string& json, std::vector<BufferView>& views, const cgltf_image& image, const ImageInfo& info, size_t index, const char* input_path, const char* output_path, const Settings& settings)
 {
+	bool dataUri = image.uri && strncmp(image.uri, "data:", 5) == 0;
+
+	if (image.uri && !dataUri && !settings.texture_embed && !settings.texture_ktx2)
+	{
+		// fast-path: we don't need to read the image to memory
+		append(json, "\"uri\":\"");
+		append(json, image.uri);
+		append(json, "\"");
+		return;
+	}
+
 	std::string img_data;
 	std::string mime_type;
-
-	if (image.uri && parseDataUri(image.uri, mime_type, img_data))
+	if (!readImage(image, input_path, img_data, mime_type))
 	{
-		// we will re-embed img_data below
-	}
-	else if (image.buffer_view && image.buffer_view->buffer->data)
-	{
-		const cgltf_buffer_view* view = image.buffer_view;
-
-		img_data.assign(static_cast<const char*>(view->buffer->data) + view->offset, view->size);
-	}
-	else if (image.uri)
-	{
-		if (settings.texture_embed)
-		{
-			std::string full_path = getFullPath(decodeUri(image.uri).c_str(), input_path);
-
-			if (!readFile(full_path.c_str(), img_data))
-			{
-				printfStderr("Warning: unable to read image %s, skipping\n", image.uri);
-			}
-		}
-
-		mime_type = inferMimeType(image.uri);
+		printStderr("Warning: unable to read image %d (%s), skipping\n", int(index), image.uri ? image.uri : "?");
+		return;
 	}
 
-	if (image.mime_type)
-		mime_type = image.mime_type;
+	bool (*encodeImage)(const std::string& data, const char* mime_type, std::string& result, const ImageInfo& info, const Settings& settings) = settings.texture_toktx ? encodeKtx : encodeBasis;
 
-	bool (*encodeImage)(const std::string& data, const char* mime_type, std::string& result, bool normal_map, bool srgb, int quality, float scale, bool pow2, bool uastc, bool verbose) =
-	    settings.texture_toktx ? encodeKtx : encodeBasis;
-
-	if (!img_data.empty())
+	if (settings.texture_ktx2)
 	{
-		if (settings.texture_ktx2)
+		std::string encoded;
+
+		if (encodeImage(img_data, mime_type.c_str(), encoded, info, settings))
 		{
-			std::string encoded;
-
-			if (encodeImage(img_data, mime_type.c_str(), encoded, info.normal_map, info.srgb, settings.texture_quality, settings.texture_scale, settings.texture_pow2, settings.texture_uastc, settings.verbose > 1))
+			if (!settings.texture_embed && image.uri && !dataUri)
 			{
-				if (!settings.texture_toktx)
-					encoded = basisToKtx(encoded, info.srgb, settings.texture_uastc);
+				std::string ktx_uri = getFileName(image.uri) + ".ktx2";
+				std::string ktx_full_path = getFullPath(decodeUri(ktx_uri.c_str()).c_str(), output_path);
 
-				writeEmbeddedImage(json, views, encoded.c_str(), encoded.size(), "image/ktx2");
-			}
-			else
-			{
-				printfStderr("Warning: unable to encode image %d, skipping\n", int(index));
-			}
-		}
-		else
-		{
-			writeEmbeddedImage(json, views, img_data.c_str(), img_data.size(), mime_type.c_str());
-		}
-	}
-	else if (image.uri)
-	{
-		if (settings.texture_ktx2)
-		{
-			std::string full_path = getFullPath(decodeUri(image.uri).c_str(), input_path);
-			std::string basis_uri = getFileName(image.uri) + ".ktx2";
-			std::string basis_full_path = getFullPath(decodeUri(basis_uri.c_str()).c_str(), output_path);
-
-			if (readFile(full_path.c_str(), img_data))
-			{
-				std::string encoded;
-
-				if (encodeImage(img_data, mime_type.c_str(), encoded, info.normal_map, info.srgb, settings.texture_quality, settings.texture_scale, settings.texture_pow2, settings.texture_uastc, settings.verbose > 1))
+				if (writeFile(ktx_full_path.c_str(), encoded))
 				{
-					if (!settings.texture_toktx)
-						encoded = basisToKtx(encoded, info.srgb, settings.texture_uastc);
-
-					if (writeFile(basis_full_path.c_str(), encoded))
-					{
-						append(json, "\"uri\":\"");
-						append(json, basis_uri);
-						append(json, "\"");
-					}
-					else
-					{
-						printfStderr("Warning: unable to save encoded image %s, skipping\n", image.uri);
-					}
+					append(json, "\"uri\":\"");
+					append(json, ktx_uri);
+					append(json, "\"");
 				}
 				else
 				{
-					printfStderr("Warning: unable to encode image %s, skipping\n", image.uri);
+					printfStderr("Warning: unable to save encoded image %s, skipping\n", image.uri);
 				}
 			}
 			else
 			{
-				printfStderr("Warning: unable to read image %s, skipping\n", image.uri);
+				writeEmbeddedImage(json, views, encoded.c_str(), encoded.size(), "image/ktx2", info.kind);
 			}
 		}
 		else
 		{
-			append(json, "\"uri\":\"");
-			append(json, image.uri);
-			append(json, "\"");
+			printfStderr("Warning: unable to encode image %d, skipping\n", int(index));
 		}
 	}
 	else
 	{
-		printfStderr("Warning: ignoring image %d since it has no URI and no valid buffer data\n", int(index));
+		writeEmbeddedImage(json, views, img_data.c_str(), img_data.size(), mime_type.c_str(), info.kind);
 	}
 }
 
@@ -899,6 +840,13 @@ void writeTexture(std::string& json, const cgltf_texture& texture, cgltf_data* d
 {
 	if (texture.image)
 	{
+		if (texture.sampler)
+		{
+			append(json, "\"sampler\":");
+			append(json, size_t(texture.sampler - data->samplers));
+			append(json, ",");
+		}
+
 		if (settings.texture_ktx2)
 		{
 			append(json, "\"extensions\":{\"KHR_texture_basisu\":{\"source\":");
@@ -1243,7 +1191,12 @@ void writeNode(std::string& json, const cgltf_node& node, const std::vector<Node
 		}
 		append(json, "]");
 	}
-	if (node.children_count || !ni.meshes.empty())
+
+	bool has_children = !ni.meshes.empty();
+	for (size_t j = 0; j < node.children_count; ++j)
+		has_children |= nodes[node.children[j] - data->nodes].keep;
+
+	if (has_children)
 	{
 		comma(json);
 		append(json, "\"children\":[");
